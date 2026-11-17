@@ -1,0 +1,286 @@
+from django.core.cache import cache
+from django.db.models import Count, Prefetch, Q
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+    inline_serializer,
+)
+from rest_framework import generics, serializers, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from assignments.models import TAAssignment
+from assignments.serializers import ErrorResponseSerializer
+from core.permissions import IsDeptAdmin, IsHeadTA, IsManagement, IsProfessor
+
+from .models import Course, CourseProfessorMapping
+from .serializers import (
+    CourseProfessorMappingSerializer,
+    CourseSerializer,
+)
+
+
+@extend_schema_view(
+    list=extend_schema(
+        summary="دریافت لیست درس‌ها",
+        parameters=[
+            OpenApiParameter(
+                name="semester_id",
+                description="فیلتر بر اساس ID ترم",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+            )
+        ],
+        responses={
+            200: CourseSerializer(many=True),
+            401: OpenApiResponse(response=ErrorResponseSerializer, description="عدم احراز هویت"),
+        },
+    ),
+    create=extend_schema(
+        summary="ایجاد درس جدید",
+        responses={
+            201: CourseSerializer,
+            400: OpenApiResponse(response=ErrorResponseSerializer, description="خطای ورودی"),
+            401: OpenApiResponse(response=ErrorResponseSerializer, description="عدم احراز هویت"),
+            403: OpenApiResponse(
+                response=ErrorResponseSerializer, description="نیاز به دسترسی Dept Admin"
+            ),
+        },
+    ),
+    destroy=extend_schema(
+        summary="حذف درس",
+        responses={
+            204: OpenApiResponse(description="حذف موفق"),
+            401: OpenApiResponse(response=ErrorResponseSerializer, description="عدم احراز هویت"),
+            403: OpenApiResponse(response=ErrorResponseSerializer, description="عدم دسترسی"),
+            404: OpenApiResponse(response=ErrorResponseSerializer, description="درس یافت نشد"),
+        },
+    ),
+)
+class CourseViewSet(viewsets.ModelViewSet):
+    serializer_class = CourseSerializer
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsDeptAdmin()]
+
+        if self.action == "get_tas":
+            return [(IsManagement | IsProfessor | IsHeadTA)()]
+
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        queryset = Course.objects.all()
+        params = self.request.query_params
+
+        semester_id = params.get("semester_id")
+        # The SPA sends the `all` sentinel for "no filter" — strip it, otherwise
+        # django-filter would try to match the literal string.
+        search = (params.get("search") or "").strip()
+        if search in {"", "all"}:
+            self.searching = False
+        else:
+            self.searching = True
+            queryset = queryset.filter(
+                Q(course_code__icontains=search) | Q(course_name__icontains=search)
+            )
+
+        mapping_qs = CourseProfessorMapping.objects.select_related("professor")
+        ta_qs = TAAssignment.objects.all()
+
+        if semester_id:
+            mapping_qs = mapping_qs.filter(semester_id=semester_id)
+            ta_qs = ta_qs.filter(semester_id=semester_id)
+            ta_filter = Q(ta_assignments__semester_id=semester_id)
+        else:
+            ta_filter = Q()
+
+        prefetch_mappings = Prefetch(
+            "professor_mappings",
+            queryset=mapping_qs,
+            to_attr="filtered_mappings",
+        )
+        prefetch_tas = Prefetch(
+            "ta_assignments",
+            queryset=ta_qs.select_related("user"),
+            to_attr="filtered_ta_assignments",
+        )
+
+        queryset = queryset.prefetch_related(prefetch_mappings, prefetch_tas).annotate(
+            annotated_ta_count=Count("ta_assignments", filter=ta_filter, distinct=True),
+            annotated_head_ta_count=Count(
+                "ta_assignments",
+                filter=ta_filter & Q(ta_assignments__role=TAAssignment.Role.HEAD_TA),
+                distinct=True,
+            ),
+        )
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        semester_id = request.query_params.get("semester_id", "all")
+        cache_key = f"courses_list_semester_{semester_id}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+        response = super().list(request, *args, **kwargs)
+        # Reduced TTL from 3600 to 300 seconds (5 mins) to prevent stale cache edge cases
+        cache.set(cache_key, response.data, timeout=300)
+        return response
+
+    def _invalidate_course_cache(self):
+        """پاک کردن الگوی کش لیست دروس هنگام هرگونه تغییر دیتایی"""
+        try:
+            if hasattr(cache, "delete_pattern"):
+                cache.delete_pattern("courses_list_semester_*")
+            else:
+                cache.clear()
+        except Exception:
+            pass
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        self._invalidate_course_cache()
+        return response
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        self._invalidate_course_cache()
+        return response
+
+    def destroy(self, request, *args, **kwargs):
+        response = super().destroy(request, *args, **kwargs)
+        self._invalidate_course_cache()
+        return response
+
+    @extend_schema(
+        summary="دریافت لیست اساتید برای فیلتر دایرکتوری دروس",
+        parameters=[
+            OpenApiParameter(
+                name="semester_id",
+                description="فیلتر بر اساس ID ترم",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+            )
+        ],
+        responses={
+            200: inline_serializer(
+                name="CourseInstructorsResponse",
+                fields={"results": serializers.ListField(child=serializers.CharField())},
+            ),
+            401: OpenApiResponse(response=ErrorResponseSerializer, description="عدم احراز هویت"),
+        },
+    )
+    @action(detail=False, methods=["get"], url_path="instructors")
+    def instructors(self, request):
+        """Distinct professor display names, for the directory filter dropdown.
+
+        The SPA calls GET /api/v1/courses/instructors/ — this endpoint used to
+        be missing entirely (404 in live mode).
+        """
+        mappings = CourseProfessorMapping.objects.select_related("professor")
+        semester_id = request.query_params.get("semester_id")
+        if semester_id and semester_id != "all":
+            mappings = mappings.filter(semester_id=semester_id)
+
+        names = set()
+        for mapping in mappings:
+            professor = mapping.professor
+            full_name = f"{professor.first_name} {professor.last_name}".strip()
+            names.add(full_name or professor.username)
+
+        return Response({"results": sorted(names)})
+
+    @extend_schema(
+        summary="دریافت لیست تی‌ای‌های یک درس",
+        parameters=[
+            OpenApiParameter(
+                name="semester_id",
+                description="فیلتر بر اساس ID ترم",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+            )
+        ],
+        responses={
+            200: inline_serializer(
+                name="CourseTAsResponse",
+                fields={
+                    "course_id": serializers.IntegerField(),
+                    "course_code": serializers.CharField(),
+                    "head_ta": serializers.DictField(allow_null=True),
+                    "tas": serializers.ListField(child=serializers.DictField()),
+                },
+            ),
+            401: OpenApiResponse(response=ErrorResponseSerializer, description="عدم احراز هویت"),
+            403: OpenApiResponse(response=ErrorResponseSerializer, description="عدم دسترسی"),
+            404: OpenApiResponse(response=ErrorResponseSerializer, description="درس یافت نشد"),
+        },
+    )
+    @action(detail=True, methods=["get"], url_path="tas")
+    def get_tas(self, request, pk=None):
+        course = self.get_object()
+        semester_id = request.query_params.get("semester_id")
+
+        assignments = course.ta_assignments.select_related("user")
+        if semester_id:
+            assignments = assignments.filter(semester_id=semester_id)
+
+        head_ta_data = None
+        tas_data = []
+
+        for assignment in assignments:
+            user = assignment.user
+            full_name = f"{user.first_name} {user.last_name}".strip()
+            user_info = {
+                "id": user.id,
+                "name": full_name or user.username,
+                "email": user.email,
+            }
+            if assignment.role == TAAssignment.Role.HEAD_TA:
+                head_ta_data = user_info
+            else:
+                tas_data.append(user_info)
+
+        return Response(
+            {
+                "course_id": course.id,
+                "course_code": course.course_code,
+                "head_ta": head_ta_data,
+                "tas": tas_data,
+            }
+        )
+
+
+@extend_schema_view(
+    post=extend_schema(
+        summary="تخصیص استاد به درس",
+        responses={
+            201: CourseProfessorMappingSerializer,
+            400: OpenApiResponse(
+                response=ErrorResponseSerializer,
+                description="استاد قبلاً تخصیص داده شده یا نقش معتبر نیست",
+            ),
+            401: OpenApiResponse(response=ErrorResponseSerializer, description="عدم احراز هویت"),
+            403: OpenApiResponse(response=ErrorResponseSerializer, description="عدم دسترسی"),
+        },
+    )
+)
+class AssignProfessorView(generics.CreateAPIView):
+    queryset = CourseProfessorMapping.objects.all()
+    serializer_class = CourseProfessorMappingSerializer
+    permission_classes = [IsDeptAdmin]
+
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        # Invalidate course list cache upon assigning/changing professor to prevent stale cache read
+        try:
+            if hasattr(cache, "delete_pattern"):
+                cache.delete_pattern("courses_list_semester_*")
+            else:
+                cache.clear()
+        except Exception:
+            pass
+        return response

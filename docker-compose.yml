@@ -1,0 +1,43 @@
+services:
+  backend:
+    build: .
+    command: ./docker-entrypoint.sh gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
+    env_file: .env
+    ports: ["8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      # P3 fix: previously service_started, which let Django boot before Redis
+      # could accept connections (cache/session race on startup).
+      redis: {condition: service_healthy}
+  db:
+    image: postgres:16-alpine
+    environment: {POSTGRES_DB: tams, POSTGRES_USER: tams, POSTGRES_PASSWORD: tams}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U tams"], interval: 5s, retries: 10}
+  redis:
+    image: redis:7-alpine
+    # P3 fix: healthcheck so `depends_on: condition: service_healthy` works.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+  frontend:
+    # P3 fix: the SPA had no compose service at all; dev-only Vite server.
+    # In production the built statics are served by Django/nginx instead.
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    ports: ["5173:5173"]
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      # Proxy /api to the backend container (see vite.config.ts server.proxy).
+      VITE_PROXY_TARGET: http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata: {}
+  frontend_node_modules: {}

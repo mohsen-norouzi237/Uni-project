@@ -1,0 +1,108 @@
+.capacity-bar-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.capacity-bar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
+.capacity-bar--rtl .capacity-bar__header {
+  direction: rtl;
+}
+
+.capacity-bar__label {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.capacity-bar__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  color: #64748b;
+}
+
+.capacity-bar__numbers {
+  font-weight: 500;
+  color: #334155;
+}
+
+.capacity-bar__separator {
+  opacity: 0.4;
+}
+
+.capacity-bar__percent {
+  font-weight: 600;
+  color: #475569;
+}
+
+.capacity-bar__track {
+  width: 100%;
+  background-color: #e2e8f0;
+  border-radius: 9999px;
+  overflow: hidden;
+  position: relative;
+}
+
+.capacity-bar__fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.35s ease-in-out, background-color 0.35s ease-in-out;
+}
+
+/* Compact variant: single row, sized for a table cell.
+   Replaces the inline LoadBar that used to live in WorkloadMonitoringPage. */
+.capacity-bar--compact {
+  max-width: 180px;
+  margin-inline: auto;
+}
+
+.capacity-bar__compact-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.capacity-bar--compact.capacity-bar--rtl .capacity-bar__compact-row {
+  direction: rtl;
+}
+
+.capacity-bar__compact-track {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.capacity-bar--compact .capacity-bar__numbers {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.capacity-bar__full-badge {
+  flex-shrink: 0;
+  background-color: #f43f5e;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .capacity-bar__fill {
+    transition: none;
+  }
+}
