@@ -139,7 +139,10 @@ class Command(BaseCommand):
         account's password is left untouched.
         """
         for username, email, role, first_name, last_name, is_superuser, is_staff in TEST_USERS:
-            existing = User.objects.filter(username=username).first() or User.objects.filter(email=email).first()
+            existing = (
+                User.objects.filter(username=username).first()
+                or User.objects.filter(email=email).first()
+            )
             if existing:
                 # Heal the role if a previous run / manual edit drifted it.
                 if existing.role != role:
@@ -164,8 +167,7 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                "Test accounts ready (password '%s'): admin / professor / headta / ta"
-                % TEST_PASSWORD
+                f"Test accounts ready (password '{TEST_PASSWORD}'): admin / professor / headta / ta"
             )
         )
 

@@ -1,3 +1,4 @@
+from django.db.models.deletion import ProtectedError
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
@@ -102,6 +103,12 @@ class AssignmentNotFoundError(TAMSException):
 
 
 def custom_exception_handler(exc, context):
+    if isinstance(exc, ProtectedError):
+        return Response(
+            {"status_code": 409, "error": "این مورد به رکوردهای دیگری وابسته است و قابل حذف نیست."},
+            status=409,
+        )
+
     if isinstance(exc, TAMSException):
         return Response(
             {

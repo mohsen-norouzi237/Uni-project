@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 
 export interface Column<T> {
@@ -18,6 +18,7 @@ interface DataTableProps<T> {
   columns: Column<T>[];
   emptyMessage?: string;
   pageSize?: number;
+  paginate?: boolean;
 }
 
 const renderPrimitive = (value: unknown): ReactNode => {
@@ -36,33 +37,21 @@ const compare = (a: unknown, b: unknown): number => {
   return String(a).localeCompare(String(b), 'fa');
 };
 
+function sortKeyFor<T>(column: Column<T>): keyof T | null {
+  if (!column.sortable) return null;
+  return column.sortKey ?? (typeof column.accessor === 'function' ? null : column.accessor);
+}
+
 export function DataTable<T extends { id?: string | number }>({
   data,
   columns,
   emptyMessage = 'داده‌ای برای نمایش وجود ندارد.',
   pageSize = 5,
+  paginate = true,
 }: DataTableProps<T>) {
   const [sortColumnIndex, setSortColumnIndex] = useState<number | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [currentPage, setCurrentPage] = useState(1);
-
-  /** A column can sort when it has a plain accessor or an explicit sortKey. */
-  const sortKeyFor = (col: Column<T>): keyof T | null => {
-    if (!col.sortable) return null;
-    if (col.sortKey) return col.sortKey;
-    return typeof col.accessor === 'function' ? null : col.accessor;
-  };
-
-  /**
-   * Filtering into fewer pages must not strand the user on an empty page.
-   *
-   * Keyed off `data.length`, not `data`: the array identity changes on almost
-   * every parent render (`tasks.filter(...)` and friends), which previously
-   * snapped the user back to page 1 whenever they sorted a column.
-   */
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [data.length, pageSize]);
+  const [page, setPage] = useState(1);
 
   const handleSort = (index: number) => {
     if (sortColumnIndex === index) {
@@ -88,11 +77,14 @@ export function DataTable<T extends { id?: string | number }>({
     });
   }, [data, sortColumnIndex, sortDirection, columns]);
 
-  const totalPages = Math.ceil(sortedData.length / pageSize) || 1;
+  const totalPages = paginate ? Math.max(1, Math.ceil(sortedData.length / pageSize)) : 1;
+  const currentPage = Math.min(page, totalPages);
+  if (currentPage !== page) setPage(currentPage);
   const paginatedData = useMemo(() => {
+    if (!paginate) return sortedData;
     const start = (currentPage - 1) * pageSize;
     return sortedData.slice(start, start + pageSize);
-  }, [sortedData, currentPage, pageSize]);
+  }, [sortedData, currentPage, pageSize, paginate]);
 
   return (
     <div className="w-full space-y-4">
@@ -165,7 +157,7 @@ export function DataTable<T extends { id?: string | number }>({
         </table>
       </div>
 
-      {data.length > 0 && (
+      {paginate && totalPages > 1 && (
         <div className="flex items-center justify-between px-2 py-2 text-sm text-gray-600">
           <div>
             صفحه <span className="font-semibold text-gray-800">{currentPage}</span> از{' '}
@@ -174,7 +166,7 @@ export function DataTable<T extends { id?: string | number }>({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+              onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
               disabled={currentPage === 1}
               className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -182,7 +174,7 @@ export function DataTable<T extends { id?: string | number }>({
             </button>
             <button
               type="button"
-              onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+              onClick={() => setPage((prev) => Math.min(prev + 1, totalPages))}
               disabled={currentPage === totalPages}
               className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
             >

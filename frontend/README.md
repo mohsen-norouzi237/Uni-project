@@ -13,16 +13,18 @@ Requires **Node 20+** (Node 22 recommended).
 ```bash
 git clone <REPO_URL>
 cd frontend
-npm install
+npm ci
 cp .env.example .env     # Windows: copy .env.example .env
 npm run dev
 ```
 
-Open the URL Vite prints (usually http://localhost:5173).
+Open the URL Vite prints (usually http://localhost:18765).
 
-**Login:** `admin` / `123456`
-
-The app currently runs entirely on mock data — no backend needed.
+The frontend uses Django by default. For local Vite, start Django on port 8000 or set
+`VITE_PROXY_TARGET`. With Docker Compose, the frontend is on port 5173 and uses the
+backend container. Fill the root `.env` before starting Compose, including a random
+`SECRET_KEY` (for example, generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`).
+Log in with an account provisioned on that Django instance.
 
 ---
 
@@ -32,8 +34,8 @@ The app currently runs entirely on mock data — no backend needed.
 
 | Variable | Purpose |
 |---|---|
-| `VITE_API_BASE_URL` | Django API base. Default `http://localhost:8000/api/v1` |
-| `VITE_USE_MOCKS` | `true` = mock auth + data, no backend required |
+| `VITE_API_BASE_URL` | Django API base. Default `/api/v1` through the Vite proxy |
+| `VITE_USE_MOCKS` | `true` enables fixture login and selected demo pages in Vite dev mode |
 | `VITE_MOCK_ROLE` | Which role you log in as (see below) |
 | `VITE_ENABLE_PREVIEW` | `true` mounts the dev-only `/preview/ui-kit` route |
 
@@ -45,7 +47,7 @@ In mock mode the credentials are always `admin` / `123456`; the **role comes fro
 VITE_MOCK_ROLE=professor
 ```
 
-Valid values: `super_admin`, `dept_admin`, `professor`, `head_ta`, `ta`, `student`.
+Valid values: `super_admin`, `dept_admin`, `professor`, `head_ta`, `ta`.
 Anything else falls back to `super_admin`.
 
 After changing it: **restart the dev server** (Vite reads `.env` only at startup), then **log out and log back in** — a cached session keeps the old role.
@@ -90,7 +92,7 @@ src/
 
 ### Conventions
 
-- **Never call axios from a page.** Add a method to a service in `src/services/`; it returns the same shape whether mocked or live, so flipping `VITE_USE_MOCKS=false` requires no page changes.
+- **Never call axios from a page.** Add a method to a service in `src/services/`; keep the API payload type and query key with the service.
 - **Routes and role groups live only in `src/routes/router.tsx`.** Don't redeclare role arrays elsewhere.
 - **Use the shared components** in `src/components/` rather than hand-rolling tables, modals or badges.
 - Imports use the `@/` alias for `src/` (e.g. `@/components/DataTable`).
@@ -115,15 +117,13 @@ Then open a Pull Request on GitHub. Keep `main` deployable; don't commit directl
 
 ## Current status
 
-Backend integration has not started; everything reads from `src/mocks/`.
+Live pages read the course catalog, scoped rosters, professor schedules, personal
+assignments, workload, faculty, and semesters from Django. Assignment Management
+can change roles and revoke assignments. Semester Management supports creation,
+editing, and deletion.
 
-**Done:** auth + token refresh, role-based routing, course directory, course details, workload monitoring, assignments, professor / head-TA / TA dashboards, semester management, shared UI kit.
+Task tracking and application review are available as fixture demonstrations in
+development. They need persisted backend workflows before they can be offered in
+live mode. Frontend CI runs lint, type-check, and the production build.
 
-**Still stubs (one line each):**
-- `src/pages/FacultyManagement.tsx` — مدیریت اساتید و دانشکده
-- `src/pages/StudentCourses.tsx` — دروس دانشجویی
-- `src/pages/AdminDashboard.tsx` — hardcoded statistics
-
-**Known gaps:** only the course-directory and workload pages use TanStack Query (the rest still use local `useState` + `setTimeout`); several dashboards keep their own task/assignment types instead of `@/types/task`; no tests yet.
-
-See `FIXES.md` and `REFACTORING.md` for the history of earlier cleanup passes.
+See `FIXES.md` and `REFACTORING.md` for previous frontend changes.

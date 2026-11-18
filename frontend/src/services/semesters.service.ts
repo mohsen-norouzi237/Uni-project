@@ -1,4 +1,5 @@
 import { apiClient } from '@/api/client';
+import type { Paginated } from '@/types/api';
 
 /**
  * Wire shape of semesters/serializers.py::SemesterSerializer.
@@ -22,10 +23,15 @@ export type SemesterPayload = Omit<Semester, 'id' | 'created_at' | 'updated_at'>
 const BASE_PATH = '/semesters/';
 
 export const semesterService = {
-  /** GET /api/v1/semesters/ — plain list (the viewset is NOT paginated). */
   async list(): Promise<Semester[]> {
-    const { data } = await apiClient.get<Semester[]>(BASE_PATH);
-    return data;
+    const semesters: Semester[] = [];
+    for (let page = 1; ; page += 1) {
+      const { data } = await apiClient.get<Paginated<Semester>>(BASE_PATH, {
+        params: { page, page_size: 100 },
+      });
+      semesters.push(...data.results);
+      if (!data.next) return semesters;
+    }
   },
 
   /** POST /api/v1/semesters/ — Super Admin only (403 otherwise). */
@@ -50,3 +56,14 @@ export const semesterKeys = {
   all: ['semesters'] as const,
   lists: () => ['semesters', 'list'] as const,
 };
+
+const dayFormat = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
+export const semesterToday = () => dayFormat.format(new Date());
+
+export function currentSemester(semesters: Semester[]) {
+  const today = semesterToday();
+  return semesters.find(({ start_date, end_date }) => start_date <= today && today <= end_date);
+}

@@ -35,8 +35,10 @@ class UserSerializer(serializers.ModelSerializer):
             "last_name",
             "role",
             "student_id",
+            "is_active",
             "password",
         )
+        read_only_fields = ("is_active",)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

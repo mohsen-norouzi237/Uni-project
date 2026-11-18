@@ -1,4 +1,3 @@
-from django.core.cache import cache
 from django.db import transaction
 
 from accounts.models import User
@@ -14,14 +13,6 @@ from core.exceptions import (
     MaxCourseLimitReachedError,
 )
 from courses.models import Course, CourseProfessorMapping
-
-
-def invalidate_course_cache(course_id):
-    """
-    تابع کمکی برای پاک کردن کش یک درس خاص بعد از هر تغییر
-    """
-    cache.delete(f"course_{course_id}_directory")
-    cache.delete(f"course_{course_id}_detail")
 
 
 @transaction.atomic
@@ -89,9 +80,6 @@ def assign_ta(user, course, semester, professor, role, actor):
         },
     )
 
-    # Invalidate Cache
-    invalidate_course_cache(course.id)
-
     return assignment
 
 
@@ -101,8 +89,10 @@ def update_ta_assignment(assignment_id, role, actor):
     آپدیت نقش تی‌ای با قفل‌گذاری و رعایت قوانین
     """
     try:
+        course_id = TAAssignment.objects.values_list("course_id", flat=True).get(pk=assignment_id)
+        Course.objects.select_for_update().get(pk=course_id)
         assignment = TAAssignment.objects.select_for_update().get(pk=assignment_id)
-    except TAAssignment.DoesNotExist:
+    except (TAAssignment.DoesNotExist, Course.DoesNotExist):
         raise AssignmentNotFoundError()
 
     if role not in TAAssignment.Role.values:
@@ -134,9 +124,6 @@ def update_ta_assignment(assignment_id, role, actor):
             new_values={"role": role},
         )
 
-        # Invalidate Cache
-        invalidate_course_cache(assignment.course.id)
-
     return assignment
 
 
@@ -147,12 +134,6 @@ def bulk_assign_ta(assignments_data, actor):
     """
     results = []
     for data in assignments_data:
-        # `Course` has no `semester` attribute — semesters are attached to a
-        # course through CourseProfessorMapping. The bulk serializer validates
-        # and resolves the Semester object, so use it directly.
-        # `group` must be a zero-padded two-digit string ("01"), matching the
-        # TAAssignment.group CharField validator — never an integer.
-        group = str(data.get("group", "01")).zfill(2)
         assignment = assign_ta(
             user=data["user"],
             course=data["course"],
@@ -188,10 +169,6 @@ def remove_ta_assignment(assignment_id, actor):
         old_values=old_values,
     )
 
-    course_id = assignment.course_id
     assignment.delete()
-
-    # Invalidate Cache
-    invalidate_course_cache(course_id)
 
     return True

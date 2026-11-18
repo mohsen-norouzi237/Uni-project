@@ -44,7 +44,6 @@ export const Button = ({
   children,
   ...rest
 }: ButtonProps) => (
-  // eslint-disable-next-line react/button-has-type -- `type` is defaulted above.
   <button type={type} className={`${BASE} ${VARIANTS[variant]} ${SIZES[size]} ${className}`} {...rest}>
     {children}
   </button>

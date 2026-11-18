@@ -27,7 +27,7 @@ function round(value: number, digits: number): number {
 }
 
 function getCapacityColor(fill: number): string {
-  let hue = 120;
+  let hue: number;
   if (fill <= 0.5) {
     hue = 120 - 60 * (fill / 0.5);
   } else if (fill <= 0.75) {

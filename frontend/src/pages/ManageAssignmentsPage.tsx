@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { toApiError } from '@/api/client';
+import Pagination from '@/components/Pagination';
+import { usePagination } from '@/hooks/usePagination';
+import { coursesKeys } from '@/services/courses.service';
+import { dashboardKeys } from '@/services/dashboard.service';
+import { workloadKeys } from '@/services/workload.service';
 import Button from '@/components/Button';
 import ConfirmDeleteModal from '@/components/ConfirmDeleteModal';
 import DataTable, { type Column } from '@/components/DataTable';
@@ -29,10 +35,14 @@ export const ManageAssignmentsPage = () => {
   const [selectedAssignment, setSelectedAssignment] = useState<AssignmentRow | null>(null);
   const [notification, setNotification] = useState<Notification | null>(null);
 
-  const { data, isPending, isError, refetch } = useQuery({
-    queryKey: assignmentsKeys.list({}),
-    queryFn: () => assignmentsService.list(),
+  const pageSize = 20;
+  const { page, setPage, bind } = usePagination(pageSize);
+  const params = { page, pageSize };
+  const { data, isPending, isError, isFetching, refetch } = useQuery({
+    queryKey: assignmentsKeys.list(params),
+    queryFn: () => assignmentsService.list(params),
   });
+  const pagination = bind(data);
 
   // Notifications auto-dismiss; previously they stayed on screen forever.
   useEffect(() => {
@@ -41,40 +51,23 @@ export const ManageAssignmentsPage = () => {
     return () => clearTimeout(timer);
   }, [notification]);
 
-  /**
-   * Optimistic delete with snapshot/rollback through React Query's
-   * onMutate/onError/onSettled contract so a failed delete can never leave
-   * a stale selection or cache behind.
-   */
+  const refreshStaffing = () => {
+    for (const queryKey of [assignmentsKeys.lists(), coursesKeys.all, dashboardKeys.all, workloadKeys.all]) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+  };
+
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => assignmentsService.remove(id),
-    onMutate: async (id: number) => {
-      await queryClient.cancelQueries({ queryKey: assignmentsKeys.lists() });
-      const listKey = assignmentsKeys.list({});
-      const previous = queryClient.getQueryData<typeof data>(listKey);
-      queryClient.setQueryData<typeof data>(listKey, (current) =>
-        current ? { ...current, results: current.results.filter((r) => r.id !== id) } : current,
-      );
-      return { previous };
+    mutationFn: (assignment: AssignmentRow) => assignmentsService.remove(assignment.id),
+    onSuccess: (_result, assignment) => {
+      setNotification({ message: `تخصیص ${assignment.user_name} با موفقیت حذف شد.`, type: 'success' });
+      if (page > 1 && data?.results.length === 1) setPage(page - 1);
+      refreshStaffing();
     },
-    onSuccess: () => {
-      const name = selectedAssignment?.user_name ?? '';
-      setNotification({ message: `تخصیص ${name} با موفقیت حذف شد.`, type: 'success' });
+    onError: (error) => {
+      setNotification({ message: toApiError(error, 'حذف ناموفق بود.').message, type: 'error' });
     },
-    onError: (error, _id, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(assignmentsKeys.list({}), context.previous);
-      }
-      setNotification({
-        message: error instanceof Error ? `${error.message} - لیست به حالت قبل بازگشت.` : 'حذف ناموفق بود.',
-        type: 'error',
-      });
-    },
-    onSettled: () => {
-      // One exit path for both outcomes: no stale selection can survive.
-      setSelectedAssignment(null);
-      void queryClient.invalidateQueries({ queryKey: assignmentsKeys.lists() });
-    },
+    onSettled: () => setSelectedAssignment(null),
   });
 
   /** Toggle TA <-> HEAD_TA via PATCH /assignments/:id/update/. */
@@ -83,15 +76,13 @@ export const ManageAssignmentsPage = () => {
       assignmentsService.update(id, role),
     onSuccess: () => {
       setNotification({ message: 'نقش دستیار به‌روزرسانی شد.', type: 'success' });
+      refreshStaffing();
     },
     onError: (error) => {
       setNotification({
-        message: error instanceof Error ? error.message : 'به‌روزرسانی نقش ناموفق بود.',
+        message: toApiError(error, 'به‌روزرسانی نقش ناموفق بود.').message,
         type: 'error',
       });
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: assignmentsKeys.lists() });
     },
   });
 
@@ -105,7 +96,7 @@ export const ManageAssignmentsPage = () => {
     },
     { header: 'عنوان درس', accessor: 'course_name', sortable: true },
     { header: 'ترم', accessor: 'semester_name' },
-    { header: 'گروه', accessor: (item) => <span className="font-mono">{item.group}</span> },
+    { header: 'استاد', accessor: 'professor_name' },
     {
       header: 'نقش',
       accessor: (item) => (
@@ -188,12 +179,15 @@ export const ManageAssignmentsPage = () => {
       ) : isError ? (
         <ErrorState onRetry={() => void refetch()} />
       ) : (
-        <DataTable
-          data={assignments}
-          columns={columns}
-          pageSize={10}
-          emptyMessage="هیچ تخصیصی یافت نشد."
-        />
+        <>
+          <DataTable
+            data={assignments}
+            columns={columns}
+            paginate={false}
+            emptyMessage="هیچ تخصیصی یافت نشد."
+          />
+          <Pagination {...pagination} onPrevious={pagination.goPrevious} onNext={pagination.goNext} isFetching={isFetching || deleteMutation.isPending} />
+        </>
       )}
 
       <ConfirmDeleteModal
@@ -208,7 +202,7 @@ export const ManageAssignmentsPage = () => {
             : ''
         }
         onConfirm={() =>
-          selectedAssignment && deleteMutation.mutate(selectedAssignment.id)
+          selectedAssignment && deleteMutation.mutate(selectedAssignment)
         }
         onClose={() => setSelectedAssignment(null)}
       />

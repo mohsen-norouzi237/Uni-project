@@ -1,7 +1,7 @@
 from django.db.models import Prefetch
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -33,7 +33,7 @@ class MeView(generics.RetrieveAPIView):
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all()
+    queryset = User.objects.order_by("pk")
     serializer_class = UserSerializer
 
     def get_permissions(self):
@@ -46,6 +46,16 @@ class UserViewSet(viewsets.ModelViewSet):
         if self.action == "destroy":
             return [IsSuperAdmin()]
         return [permissions.IsAuthenticated()]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = self.request.query_params.get("role")
+        if self.action == "list" and role:
+            role = role.upper()
+            if role not in User.Role.values:
+                raise ValidationError({"role": "Invalid user role."})
+            queryset = queryset.filter(role=role)
+        return queryset
 
     def perform_update(self, serializer):
         # Role changes are SUPER_ADMIN only. Validate through the SERIALIZER
@@ -63,7 +73,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
         ta_prefetch = Prefetch(
             "course__ta_assignments",
-            queryset=TAAssignment.objects.select_related("user"),
+            queryset=TAAssignment.objects.filter(role=TAAssignment.Role.HEAD_TA).select_related("user"),
             to_attr="prefetched_ta_assignments",
         )
 
@@ -81,8 +91,8 @@ class UserViewSet(viewsets.ModelViewSet):
         else:
             assignments = (
                 TAAssignment.objects.filter(user=user)
-                .select_related("course", "semester")
-                .prefetch_related("course__professor_mappings__professor", ta_prefetch)
+                .select_related("course", "semester", "professor")
+                .prefetch_related(ta_prefetch)
             )
 
             serializer = UserScheduleSerializer(assignments, many=True)

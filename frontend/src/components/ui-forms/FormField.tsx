@@ -23,7 +23,7 @@ export interface FormFieldProps<
   children: React.ReactNode;
 }
 
-export function useFormFieldError<
+function useFormFieldError<
   TFieldValues extends FieldValues = FieldValues,
   TName extends FieldPath<TFieldValues> = FieldPath<TFieldValues>,
 >(name: TName): FormFieldError | undefined {

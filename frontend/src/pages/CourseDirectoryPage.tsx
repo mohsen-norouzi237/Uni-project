@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { EmptyState } from '@/components/EmptyState';
 import { ErrorState } from '@/components/ErrorState';
 import DataTableSkeleton from '@/components/DataTableSkeleton';
@@ -8,17 +8,10 @@ import Pagination from '@/components/Pagination';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { usePagination } from '@/hooks/usePagination';
 import { coursesKeys, coursesService } from '@/services/courses.service';
+import { USE_MOCKS } from '@/services/http';
+import { semesterKeys, semesterService } from '@/services/semesters.service';
 import type { CourseFilterState, StaffingStatus } from '@/types/course';
-import { ANY, DEFAULT_COURSE_FILTERS, STAFFING_STATUS_LABELS } from '@/types/course';
-
-// Showcase departments matching the Persian UI context
-const MOCK_DEPARTMENTS = [
-  'مهندسی کامپیوتر',
-  'مهندسی برق',
-  'علوم ریاضی',
-  'فیزیک',
-  'مهندسی صنایع'
-];
+import { ANY, DEFAULT_COURSE_FILTERS, deriveStaffingStatus, STAFFING_STATUS_LABELS } from '@/types/course';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -53,6 +46,26 @@ const isStaffingStatus = (value: string): value is StaffingStatus =>
   value === 'fully_staffed' || value === 'missing_head_ta' || value === 'missing_tas';
 
 export const CourseDirectoryPage = () => {
+  const [params, setParams] = useSearchParams();
+  const id = Number(params.get('semester_id') ?? params.get('semesterId'));
+  const semesterId = !USE_MOCKS && Number.isSafeInteger(id) && id > 0 ? id : undefined;
+
+  return (
+    <CourseDirectory
+      key={semesterId ?? 'all'}
+      semesterId={semesterId}
+      setSemester={(value) => setParams(value ? { semester_id: value } : {})}
+    />
+  );
+};
+
+function CourseDirectory({ semesterId, setSemester }: {
+  semesterId?: number;
+  setSemester: (value: string) => void;
+}) {
+  const { data: semesters = [] } = useQuery({
+    queryKey: semesterKeys.lists(), queryFn: semesterService.list, enabled: !USE_MOCKS,
+  });
   const [filters, setFilters] = useState<CourseFilterState>(DEFAULT_COURSE_FILTERS);
   const { page, resetPage, bind } = usePagination(ITEMS_PER_PAGE);
 
@@ -69,7 +82,7 @@ export const CourseDirectoryPage = () => {
    - key. That is what hands pagination to the server: changing the page issues
    - a new request for that window rather than re-slicing data already in memory.
    */
-  const query = { ...filters, search: debouncedSearch, page, pageSize: ITEMS_PER_PAGE };
+  const query = { ...filters, search: debouncedSearch, semesterId, page, pageSize: ITEMS_PER_PAGE };
 
   const { data, isPending, isError, isFetching, refetch } = useQuery({
     queryKey: coursesKeys.list(query),
@@ -79,8 +92,8 @@ export const CourseDirectoryPage = () => {
   });
 
   const { data: instructors = [] } = useQuery({
-    queryKey: coursesKeys.instructors(),
-    queryFn: () => coursesService.instructors(),
+    queryKey: coursesKeys.instructors(semesterId),
+    queryFn: () => coursesService.instructors(semesterId),
   });
 
   const courses = data?.results ?? [];
@@ -90,6 +103,7 @@ export const CourseDirectoryPage = () => {
   const handleResetFilters = () => {
     setFilters(DEFAULT_COURSE_FILTERS);
     resetPage();
+    if (semesterId !== undefined) setSemester('');
   };
 
   return (
@@ -97,12 +111,28 @@ export const CourseDirectoryPage = () => {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">دایرکتوری و کاتالوگ دروس</h1>
         <p className="mt-1 text-sm text-slate-500">
-          لیست دروس ترم جاری با قابلیت فیلتر بر اساس گروه، استاد و وضعیت تخصیص دستیار
+          جستجو و بررسی وضعیت تخصیص دستیاران هر درس
         </p>
       </div>
 
       {/* Filters stay mounted while data loads, so focus is never stolen mid-typing. */}
       <div className="grid grid-cols-1 gap-4 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
+        {!USE_MOCKS && (
+          <div>
+            <label htmlFor="course-semester" className="mb-1 block text-sm font-medium text-slate-600">نیم‌سال</label>
+            <select
+              id="course-semester"
+              value={semesterId ?? ''}
+              onChange={(event) => setSemester(event.target.value)}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500/20"
+            >
+              <option value="">همه نیم‌سال‌ها</option>
+              {semesterId !== undefined && !semesters.some((row) => row.id === semesterId) &&
+                <option value={semesterId}>نیم‌سال انتخاب‌شده</option>}
+              {semesters.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+            </select>
+          </div>
+        )}
         <div>
           <label htmlFor="course-search" className="mb-1 block text-sm font-medium text-slate-600">
             جستجو
@@ -117,24 +147,6 @@ export const CourseDirectoryPage = () => {
           />
         </div>
 
-        <div>
-          <label htmlFor="course-department" className="mb-1 block text-sm font-medium text-slate-600">
-            گروه آموزشی
-          </label>
-          <select
-            id="course-department"
-            value={filters.department}
-            onChange={(event) => setFilter('department', event.target.value)}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm transition-all focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-          >
-            <option value={ANY}>همه گروه‌ها</option>
-            {MOCK_DEPARTMENTS.map((department) => (
-              <option key={department} value={department}>
-                {department}
-              </option>
-            ))}
-          </select>
-        </div>
 
         <div>
           <label htmlFor="course-instructor" className="mb-1 block text-sm font-medium text-slate-600">
@@ -206,19 +218,19 @@ export const CourseDirectoryPage = () => {
                 {courses.map((course) => (
                   <tr key={course.id} className="transition-colors hover:bg-slate-50/50">
                     <td className="p-4 font-mono font-semibold text-brand-600" dir="ltr">
-                      {course.code}
+                      {course.course_code}
                     </td>
-                    <td className="p-4 font-semibold text-slate-900">{course.title}</td>
-                    <td className="p-4">{course.instructor}</td>
-                    <td className="p-4 text-slate-600">{course.headTa}</td>
-                    <td className="p-4 text-center font-medium">{course.taCount} نفر</td>
+                    <td className="p-4 font-semibold text-slate-900">{course.course_name}</td>
+                    <td className="p-4">{course.professor_name}</td>
+                    <td className="p-4 text-slate-600">{course.head_ta_name ?? '—'}</td>
+                    <td className="p-4 text-center font-medium">{course.ta_count} نفر</td>
                     <td className="p-4 text-center">
-                      <StatusBadge status={course.status} />
+                      <StatusBadge status={deriveStaffingStatus(course)} />
                     </td>
                     <td className="p-4 text-center">
                       <Link
-                        to={`/courses/${course.id}`}
-                        aria-label={`مشاهده جزئیات درس ${course.title}`}
+                        to={`/courses/${course.id}${semesterId ? `?semester_id=${semesterId}` : ''}`}
+                        aria-label={`مشاهده جزئیات درس ${course.course_name}`}
                         className="inline-flex items-center justify-center rounded-lg bg-brand-50 px-3 py-1.5 font-medium text-brand-600 transition-colors hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40"
                       >
                         اطلاعات
@@ -244,6 +256,6 @@ export const CourseDirectoryPage = () => {
       )}
     </div>
   );
-};
+}
 
 export default CourseDirectoryPage;

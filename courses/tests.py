@@ -1,6 +1,4 @@
-from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.cache import cache
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -14,14 +12,6 @@ User = get_user_model()
 
 
 class CourseAndMappingTests(APITestCase):
-    @classmethod
-    def setUpTestData(cls):
-        settings.CACHES = {
-            "default": {
-                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            }
-        }
-
     def setUp(self):
         self.dept_admin = User.objects.create_user(
             username="admin_dept", password="123", role="DEPT_ADMIN"
@@ -37,7 +27,6 @@ class CourseAndMappingTests(APITestCase):
 
         self.course = Course.objects.create(course_code="CE101", course_name="برنامه نویسی پیشرفته")
 
-        cache.clear()
 
     # دسترسی ساخت درس فقط برای مدیر گروه
     def test_create_course_by_dept_admin(self):
@@ -45,11 +34,9 @@ class CourseAndMappingTests(APITestCase):
         url = reverse("course-list")
         data = {"course_code": "CE102", "course_name": "ساختمان داده"}
 
-        cache.set("courses_list_semester_all", ["dummy_data"])
         response = self.client.post(url, data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Course.objects.count(), 2)
-        self.assertIsNone(cache.get("courses_list_semester_all"))
 
     # خطای دسترسی برای کاربر غیرمجاز هنگام ساخت درس
     def test_create_course_forbidden_for_professor(self):
@@ -60,8 +47,8 @@ class CourseAndMappingTests(APITestCase):
         response = self.client.post(url, data)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    # تخصیص موفقیت‌آمیز استاد به درس و ابطال کش
-    def test_assign_professor_success_and_cache_invalidation(self):
+    # تخصیص موفقیت‌آمیز استاد به درس
+    def test_assign_professor_success(self):
         self.client.force_authenticate(user=self.dept_admin)
         url = reverse("assign-professor")
         data = {
@@ -71,11 +58,9 @@ class CourseAndMappingTests(APITestCase):
             "group": "01",
         }
 
-        cache.set("courses_list_semester_all", ["cached_professor_data"])
         response = self.client.post(url, data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(CourseProfessorMapping.objects.count(), 1)
-        self.assertIsNone(cache.get("courses_list_semester_all"))
 
     # جلوگیری از تخصیص کاربری که نقش استاد ندارد
     def test_assign_non_professor_fails(self):
@@ -167,3 +152,38 @@ class CourseAndMappingTests(APITestCase):
         self.assertEqual(res_tas.data["head_ta"]["id"], head_ta.id)
         self.assertEqual(len(res_tas.data["tas"]), 1)
         self.assertEqual(res_tas.data["tas"][0]["id"], normal_ta.id)
+
+    def test_course_list_applies_pagination_and_search_independently(self):
+        self.client.force_authenticate(user=self.dept_admin)
+        second = Course.objects.create(course_code="CE102", course_name="Databases")
+        url = reverse("course-list")
+
+        first_page = self.client.get(url, {"page": 1, "page_size": 1})
+        second_page = self.client.get(url, {"page": 2, "page_size": 1})
+        searched = self.client.get(url, {"search": "Databases"})
+
+        self.assertEqual(first_page.data["results"][0]["id"], self.course.pk)
+        self.assertEqual(second_page.data["results"][0]["id"], second.pk)
+        self.assertEqual(searched.data["count"], 1)
+        self.assertEqual(searched.data["results"][0]["id"], second.pk)
+
+    def test_professor_roster_contains_only_their_section(self):
+        other = User.objects.create_user(username="other_professor", role=User.Role.PROFESSOR)
+        for group, professor, assistant in (
+            ("01", self.professor, self.ta_user),
+            ("02", other, User.objects.create_user(username="other_ta", role=User.Role.TA)),
+        ):
+            CourseProfessorMapping.objects.create(
+                course=self.course, semester=self.semester, group=group, professor=professor
+            )
+            TAAssignment.objects.create(
+                course=self.course, semester=self.semester, role=TAAssignment.Role.TA,
+                professor=professor, user=assistant,
+            )
+
+        self.client.force_authenticate(user=self.professor)
+        url = reverse("course-get-tas", kwargs={"pk": self.course.pk})
+        response = self.client.get(url, {"semester_id": self.semester.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([row["id"] for row in response.data["tas"]], [self.ta_user.pk])

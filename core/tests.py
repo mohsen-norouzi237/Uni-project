@@ -24,7 +24,7 @@ class SeedDataCommandTests(TestCase):
 
         call_command("seed_data", password="test-password", stdout=output)
 
-        self.assertEqual(User.objects.count(), 14)
+        self.assertEqual(User.objects.count(), 18)
         self.assertEqual(Semester.objects.count(), 2)
         self.assertEqual(Course.objects.count(), 9)
         self.assertEqual(CourseProfessorMapping.objects.count(), 9)
@@ -34,11 +34,11 @@ class SeedDataCommandTests(TestCase):
             TAAssignment.objects.filter(role=TAAssignment.Role.HEAD_TA).count(),
             6,
         )
-        self.assertIn("users=14", output.getvalue())
+        self.assertIn("users=18", output.getvalue())
 
         call_command("seed_data", password="different-password")
 
-        self.assertEqual(User.objects.count(), 14)
+        self.assertEqual(User.objects.count(), 18)
         self.assertEqual(Semester.objects.count(), 2)
         self.assertEqual(Course.objects.count(), 9)
         self.assertEqual(CourseProfessorMapping.objects.count(), 9)

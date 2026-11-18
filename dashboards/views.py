@@ -1,4 +1,4 @@
-from django.db.models import Count, Q
+from django.db.models import Count, Exists, OuterRef, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
@@ -12,10 +12,17 @@ from assignments.models import TAAssignment
 from assignments.serializers import ErrorResponseSerializer
 from core.pagination import StandardResultsSetPagination
 from core.permissions import IsManagement, IsProfessor
+from core.query_params import semester_query_id
 from courses.models import CourseProfessorMapping
 from semesters.models import Semester
 
-from .serializers import AdminStatsSerializer, UserDashboardSerializer, WorkloadSerializer
+from .serializers import (
+    AdminStatsSerializer,
+    UserDashboardSerializer,
+    WorkloadPageSerializer,
+    WorkloadSerializer,
+    WorkloadStatus,
+)
 
 
 class AdminStatsAPIView(APIView):
@@ -39,7 +46,7 @@ class AdminStatsAPIView(APIView):
         },
     )
     def get(self, request):
-        semester_id = request.query_params.get("semester_id")
+        semester_id = semester_query_id(request)
         if semester_id:
             semester = get_object_or_404(Semester, id=semester_id)
         else:
@@ -47,7 +54,12 @@ class AdminStatsAPIView(APIView):
             if not semester:
                 return Response({"error": "ترمی یافت نشد"}, status=status.HTTP_404_NOT_FOUND)
 
-        total_courses = CourseProfessorMapping.objects.filter(semester=semester).count()
+        total_courses = (
+            CourseProfessorMapping.objects.filter(semester=semester)
+            .values("course_id")
+            .distinct()
+            .count()
+        )
 
         active_assignments = TAAssignment.objects.filter(semester=semester)
         total_ta = active_assignments.filter(role="TA").values("user").distinct().count()
@@ -104,16 +116,22 @@ class WorkloadAPIView(APIView):
                 type=OpenApiTypes.BOOL,
                 location=OpenApiParameter.QUERY,
             ),
+            OpenApiParameter(
+                name="include_distribution",
+                description="Set to 1 to include workload counts across all matching results.",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+            ),
         ],
         responses={
-            200: WorkloadSerializer(many=True),
+            200: WorkloadPageSerializer,
             401: OpenApiResponse(response=ErrorResponseSerializer, description="عدم احراز هویت"),
             403: OpenApiResponse(response=ErrorResponseSerializer, description="عدم دسترسی"),
             404: OpenApiResponse(response=ErrorResponseSerializer, description="ترمی یافت نشد"),
         },
     )
     def get(self, request):
-        semester_id = request.query_params.get("semester_id")
+        semester_id = semester_query_id(request)
         semester = (
             get_object_or_404(Semester, id=semester_id)
             if semester_id
@@ -123,18 +141,16 @@ class WorkloadAPIView(APIView):
         if not semester:
             return Response({"error": "ترمی یافت نشد"}, status=status.HTTP_404_NOT_FOUND)
 
-        user_filter = Q(role__in=[User.Role.TA, User.Role.HEAD_TA])
+        assignments = TAAssignment.objects.filter(semester=semester)
+        users = User.objects.filter(role__in=[User.Role.TA, User.Role.HEAD_TA]).order_by("pk")
+        if request.user.role == User.Role.PROFESSOR:
+            assignments = assignments.filter(professor=request.user)
+            users = users.filter(Exists(assignments.filter(user_id=OuterRef("pk"))))
 
-        if request.user.role == "PROFESSOR":
-            user_filter &= Q(ta_assignments__course__professor_mappings__professor=request.user)
-
-        users = (
-            User.objects.filter(user_filter)
-            .distinct()
-            .annotate(
-                current_courses=Count("ta_assignments", filter=Q(ta_assignments__semester=semester))
-            )
-        )
+        users = users.annotate(current_courses=Count(
+            "ta_assignments",
+            filter=Q(ta_assignments__in=assignments),
+        ))
 
         # --- Filters the frontend sends (previously ignored) -----------------
         search = (request.query_params.get("search") or "").strip()
@@ -143,29 +159,42 @@ class WorkloadAPIView(APIView):
                 Q(username__icontains=search)
                 | Q(first_name__icontains=search)
                 | Q(last_name__icontains=search)
-                | Q(ta_assignments__course__course_code__icontains=search)
-            ).distinct()
+                | Q(Exists(assignments.filter(
+                    user_id=OuterRef("pk"), course__course_code__icontains=search
+                )))
+            )
 
         overloaded = (request.query_params.get("overloaded") or "").lower() in ("1", "true", "yes")
         limit = semester.max_ta_courses_limit
         if overloaded:
             users = users.filter(current_courses__gte=limit)
 
+        distribution = None
+        if request.query_params.get("include_distribution") == "1":
+            distribution = users.aggregate(
+                zero=Count("pk", filter=Q(current_courses=0)),
+                one=Count("pk", filter=Q(current_courses=1)),
+                two=Count("pk", filter=Q(current_courses=2)),
+                three_or_more=Count("pk", filter=Q(current_courses__gte=3)),
+                total=Count("pk"),
+            )
+
+        paginator = self.pagination_class()
+        users = users.prefetch_related(Prefetch(
+            "ta_assignments",
+            queryset=assignments.select_related("course").order_by("course__course_code", "pk"),
+            to_attr="workload_assignments",
+        ))
+        page = paginator.paginate_queryset(users, request, view=self)
         workload_data = []
-        for user in users:
+        for user in page:
             remaining = max(limit - user.current_courses, 0)
             if user.current_courses < limit:
-                status_val = "AVAILABLE"
+                status_val = WorkloadStatus.AVAILABLE
             elif user.current_courses == limit:
-                status_val = "AT_CAP"
+                status_val = WorkloadStatus.AT_CAP
             else:
-                status_val = "OVER_LIMIT"
-
-            assigned_courses = list(
-                TAAssignment.objects.filter(user=user, semester=semester)
-                .select_related("course")
-                .values_list("course__course_code", flat=True)
-            )
+                status_val = WorkloadStatus.OVER_LIMIT
 
             workload_data.append(
                 {
@@ -175,7 +204,7 @@ class WorkloadAPIView(APIView):
                     "id": user.id,
                     "name": f"{user.first_name} {user.last_name}".strip() or user.username,
                     "role": user.role,
-                    "assigned_courses": assigned_courses,
+                    "assigned_courses": [a.course.course_code for a in user.workload_assignments],
                     "current_courses": user.current_courses,
                     "max_courses": limit,
                     "remaining": remaining,
@@ -183,12 +212,11 @@ class WorkloadAPIView(APIView):
                 }
             )
 
-        # Manual pagination so the filters above apply to the WHOLE set while
-        # `count` stays the full filtered total (the SPA renders its pager from it).
-        paginator = self.pagination_class()
-        page = paginator.paginate_queryset(workload_data, request, view=self)
-        serializer = WorkloadSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        serializer = WorkloadSerializer(workload_data, many=True)
+        response = paginator.get_paginated_response(serializer.data)
+        if distribution is not None:
+            response.data["distribution"] = distribution
+        return response
 
 
 class UserDashboardAPIView(APIView):
@@ -196,52 +224,53 @@ class UserDashboardAPIView(APIView):
 
     @extend_schema(
         summary="داشبورد شخصی کاربر",
+        parameters=[OpenApiParameter(
+            name="all_semesters", type=OpenApiTypes.BOOL, location=OpenApiParameter.QUERY
+        )],
         responses={200: UserDashboardSerializer(many=True)},
         description="دریافت لیست دروس، نقش‌ها و مشخصات استاد/سرتیم برای کاربر لاگین شده.",
     )
     def get(self, request):
-        user = request.user
-        semester = Semester.objects.order_by("-start_date").first()
+        assignments = TAAssignment.objects.filter(user=request.user)
+        if request.query_params.get("all_semesters", "").lower() not in {"true", "1"}:
+            latest = Semester.objects.order_by("-start_date").values("pk")[:1]
+            assignments = assignments.filter(semester_id__in=latest)
 
-        if not semester:
-            return Response([], status=200)
-
-        # دریافت انتساب‌های کاربر در ترم جاری
-        assignments = TAAssignment.objects.filter(user=user, semester=semester).select_related(
-            "course", "semester"
+        heads = TAAssignment.objects.filter(
+            semester_id__in=assignments.values("semester_id"),
+            role=TAAssignment.Role.HEAD_TA,
+        ).select_related("user")
+        assignments = (
+            assignments.select_related("course", "professor", "semester")
+            .order_by("-semester__start_date", "course__course_code", "pk")
+            .prefetch_related(Prefetch(
+                "course__ta_assignments", queryset=heads, to_attr="semester_heads",
+            ))
         )
 
         data = []
         for a in assignments:
-            # پیدا کردن نام استاد درس
-            prof_mapping = CourseProfessorMapping.objects.filter(
-                course=a.course, semester=semester
-            ).first()
-            prof_name = ""
-            if prof_mapping:
-                prof_name = (
-                    f"{prof_mapping.professor.first_name} {prof_mapping.professor.last_name}"
-                ).strip() or prof_mapping.professor.username
-
-            # پیدا کردن نام سرتیم (Head TA) درس
-            head_ta = TAAssignment.objects.filter(
-                course=a.course, semester=semester, role="HEAD_TA"
-            ).first()
-            h_name = ""
-            if head_ta:
-                h_name = (
-                    f"{head_ta.user.first_name} {head_ta.user.last_name}".strip()
-                    or head_ta.user.username
-                )
-
+            professor = a.professor
+            head = next(
+                (
+                    row.user for row in a.course.semester_heads
+                    if row.semester_id == a.semester_id and row.professor_id == a.professor_id
+                ),
+                None,
+            )
             data.append(
                 {
+                    "id": a.pk,
+                    "assignment_role": a.role,
+                    "course_id": a.course_id,
+                    "semester_id": a.semester_id,
+                    "professor_id": a.professor_id,
                     "course_name": a.course.course_name,
                     "course_code": a.course.course_code,
                     "role": a.get_role_display(),
-                    "professor_name": prof_name,
-                    "head_ta_name": h_name,
-                    "semester": semester.name,
+                    "professor_name": professor.get_full_name() or professor.username,
+                    "head_ta_name": (head.get_full_name() or head.username) if head else None,
+                    "semester": a.semester.name,
                 }
             )
 

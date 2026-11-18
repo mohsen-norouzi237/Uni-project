@@ -25,7 +25,8 @@ const applyFilters = (courses: Course[], filters: CourseFilterState): Course[] =
     const matchesStatus =
       filters.status === ANY || deriveStaffingStatus(course) === filters.status;
 
-    return matchesSearch && matchesStatus;
+    const matchesInstructor = filters.instructor === ANY || course.professor_name === filters.instructor;
+    return matchesSearch && matchesStatus && matchesInstructor;
   });
 };
 
@@ -41,11 +42,35 @@ const toParams = (query: CourseQuery): Record<string, string | number> => {
     page: query.page,
     page_size: query.pageSize,
   };
+  if (query.semesterId !== undefined) params.semester_id = query.semesterId;
   if (query.search.trim() !== '') params['search'] = query.search.trim();
+  if (query.instructor !== ANY) params.instructor = query.instructor;
+  if (query.status !== ANY) params.status = query.status;
   return params;
 };
 
+export interface CourseMember {
+  id: number;
+  assignment_id: number;
+  can_remove: boolean;
+  name: string;
+  semester_id: number;
+  professor_id: number;
+}
+
+interface CourseRoster {
+  head_tas: CourseMember[];
+  tas: CourseMember[];
+}
+
 export const coursesService = {
+  async roster(id: number, semesterId?: number): Promise<CourseRoster> {
+    const { data } = await apiClient.get<CourseRoster>(`${BASE_PATH}${id}/tas/`, {
+      params: { semester_id: semesterId },
+    });
+    return data;
+  },
+
   /**
    * Returns ONE page of courses.
    *
@@ -63,7 +88,7 @@ export const coursesService = {
     return data;
   },
 
-  async retrieve(id: number): Promise<Course> {
+  async retrieve(id: number, semesterId?: number): Promise<Course> {
     if (USE_MOCKS) {
       await delay(250);
       const course = MOCK_COURSES.find((item) => item.id === id);
@@ -71,7 +96,7 @@ export const coursesService = {
       return course;
     }
 
-    const { data } = await apiClient.get<Course>(`${BASE_PATH}${id}/`);
+    const { data } = await apiClient.get<Course>(`${BASE_PATH}${id}/`, { params: { semester_id: semesterId } });
     return data;
   },
 
@@ -83,13 +108,13 @@ export const coursesService = {
    * This used to be typed as a bare string[] and 404ed because the endpoint
    * did not exist yet; both problems are now fixed.
    */
-  async instructors(): Promise<string[]> {
+  async instructors(semesterId?: number): Promise<string[]> {
     if (USE_MOCKS) {
       await delay(120);
       return Array.from(new Set(MOCK_COURSES.map((course) => course.professor_name)));
     }
 
-    const { data } = await apiClient.get<{ results: string[] }>(`${BASE_PATH}instructors/`);
+    const { data } = await apiClient.get<{ results: string[] }>(`${BASE_PATH}instructors/`, { params: { semester_id: semesterId } });
     return data.results ?? [];
   },
 };
@@ -103,6 +128,7 @@ export const coursesKeys = {
   all: ['courses'] as const,
   lists: () => ['courses', 'list'] as const,
   list: (query: CourseQuery) => ['courses', 'list', query] as const,
-  detail: (id: number) => ['courses', 'detail', id] as const,
-  instructors: () => ['courses', 'instructors'] as const,
+  detail: (id: number, semesterId?: number) => ['courses', 'detail', id, semesterId] as const,
+  roster: (id: number, semesterId?: number) => ['courses', 'roster', id, semesterId] as const,
+  instructors: (semesterId?: number) => ['courses', 'instructors', semesterId] as const,
 };

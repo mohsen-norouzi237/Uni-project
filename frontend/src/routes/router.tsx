@@ -5,6 +5,7 @@ import AppLayout from '@/layouts/AppLayout';
 import ProtectedRoute from './ProtectedRoute';
 import LoadingState from '@/components/LoadingState';
 import RouteErrorPage from '@/pages/RouteErrorPage';
+import { USE_MOCKS } from '@/services/http';
 
 import {
   ADMIN_ROLES,
@@ -29,39 +30,25 @@ const Unauthorized = lazy(() => import('@/pages/Unauthorized'));
 
 const AdminDashboard = lazy(() => import('@/pages/AdminDashboard'));
 const CourseDirectoryPage = lazy(() => import('@/pages/CourseDirectoryPage'));
-const CourseDetailsPage = lazy(() => import('@/pages/CoursesDetails'));
+const LiveCourseDetails = lazy(() => import('@/pages/LiveCoursePages').then((module) => ({ default: module.LiveCourseDetails })));
+const LiveProfessorDashboard = lazy(() => import('@/pages/LiveCoursePages').then((module) => ({ default: module.LiveProfessorDashboard })));
+const LiveTADashboard = lazy(() => import('@/pages/LiveCoursePages').then(({ LiveAssignmentDashboard }) => ({ default: () => <LiveAssignmentDashboard head={false} /> })));
+const LiveHeadTADashboard = lazy(() => import('@/pages/LiveCoursePages').then(({ LiveAssignmentDashboard }) => ({ default: () => <LiveAssignmentDashboard head /> })));
 const FacultyManagement = lazy(() => import('@/pages/FacultyManagement'));
-const HeadTADashboard = lazy(() => import('@/pages/HeadTADashboard'));
 const ManageAssignmentsPage = lazy(() => import('@/pages/ManageAssignmentsPage'));
 const MyTACourses = lazy(() => import('@/pages/MyTaCourses'));
-const ProfessorDashboard = lazy(() => import('@/pages/ProfessorDashboard'));
 const SemesterManagement = lazy(() => import('@/pages/admin/SemesterManagement'));
-const TADashboard = lazy(() => import('@/pages/TADashboard'));
 const WorkloadMonitoringPage = lazy(() => import('@/pages/WorkloadMonitoringPage'));
-const UiKitPreviewPage = lazy(() => import('@/pages/previews/UiKitPreviewPage'));
 
-/**
- * Role groups come from @/constants/roles — the single source of truth shared
- * with Sidebar.tsx and authStore.ts, so a role can never be granted in one
- * place and denied in another. The former STUDENT_ROLES group was deleted:
- * the backend has no STUDENT role (audit: "Orphaned Student Role").
- */
+const demos = import.meta.env.DEV ? {
+  CourseDetailsPage: lazy(() => import('@/pages/CoursesDetails')),
+  ProfessorDashboard: lazy(() => import('@/pages/ProfessorDashboard')),
+  HeadTADashboard: lazy(() => import('@/pages/HeadTADashboard')),
+  TADashboard: lazy(() => import('@/pages/TADashboard')),
+  UiKitPreviewPage: lazy(() => import('@/pages/previews/UiKitPreviewPage')),
+} : null;
 
-/**
- * The UI-kit preview tree is opt-in and still authenticated.
- *
- * Two independent conditions must hold:
- *   1. `import.meta.env.DEV` - the subtree is statically removed from any
- *      production build, so it can never ship.
- *   2. `VITE_ENABLE_PREVIEW === 'true'` - an explicit opt-in, so a dev or
- *      staging server does not expose the previews by default.
- *
- * Even then the routes sit inside `<ProtectedRoute allowedRoles={ALL_ROLES} />`.
- * Previously they were mounted unguarded, so an anonymous visitor could open
- * `/preview/admin-dashboard` and render `<AppLayout>` -> `<Sidebar>` against a
- * `null` user.
- */
-const PREVIEW_ENABLED = import.meta.env.DEV && import.meta.env.VITE_ENABLE_PREVIEW === 'true';
+const PREVIEW_ENABLED = import.meta.env.VITE_ENABLE_PREVIEW === 'true';
 
 /** Wraps a lazy page in the shared suspense fallback. */
 const page = (Component: ComponentType): ReactElement => (
@@ -70,7 +57,7 @@ const page = (Component: ComponentType): ReactElement => (
   </Suspense>
 );
 
-const previewRoutes = PREVIEW_ENABLED
+const previewRoutes = PREVIEW_ENABLED && demos
   ? [
       {
         element: <ProtectedRoute allowedRoles={DIRECTORY_ROLES} />,
@@ -79,17 +66,17 @@ const previewRoutes = PREVIEW_ENABLED
             path: '/preview',
             element: <AppLayout />,
             children: [
-              { path: 'ui-kit', element: page(UiKitPreviewPage) },
+              { path: 'ui-kit', element: page(demos.UiKitPreviewPage) },
               { path: 'admin-dashboard', element: page(AdminDashboard) },
               { path: 'courses', element: page(CourseDirectoryPage) },
-              { path: 'courses/:courseId', element: page(CourseDetailsPage) },
+              { path: 'courses/:courseId', element: page(demos.CourseDetailsPage) },
               { path: 'workload', element: page(WorkloadMonitoringPage) },
               { path: 'assignments', element: page(ManageAssignmentsPage) },
               { path: 'semester', element: page(SemesterManagement) },
-              { path: 'professor-dashboard', element: page(ProfessorDashboard) },
+              { path: 'professor-dashboard', element: page(demos.ProfessorDashboard) },
               { path: 'my-ta-courses', element: page(MyTACourses) },
-              { path: 'head-ta-dashboard/:courseId', element: page(HeadTADashboard) },
-              { path: 'ta-dashboard/:courseId', element: page(TADashboard) },
+              { path: 'head-ta-dashboard/:courseId', element: page(demos.HeadTADashboard) },
+              { path: 'ta-dashboard/:courseId', element: page(demos.TADashboard) },
             ],
           },
         ],
@@ -132,26 +119,26 @@ export const router = createBrowserRouter([
             element: <ProtectedRoute allowedRoles={DIRECTORY_ROLES} />,
             children: [
               { path: 'courses', element: page(CourseDirectoryPage) },
-              { path: 'courses/:courseId', element: page(CourseDetailsPage) },
+              { path: 'courses/:courseId', element: page(USE_MOCKS && demos ? demos.CourseDetailsPage : LiveCourseDetails) },
             ],
           },
 
           {
             element: <ProtectedRoute allowedRoles={[ROLES.PROFESSOR]} />,
-            children: [{ path: 'professor-dashboard', element: page(ProfessorDashboard) }],
+            children: [{ path: 'professor-dashboard', element: page(USE_MOCKS && demos ? demos.ProfessorDashboard : LiveProfessorDashboard) }],
           },
 
           {
             element: <ProtectedRoute allowedRoles={TA_ROLES} />,
             children: [
               { path: 'my-ta-courses', element: page(MyTACourses) },
-              { path: 'ta-dashboard/:courseId', element: page(TADashboard) },
+              { path: 'ta-dashboard/:courseId', element: page(USE_MOCKS && demos ? demos.TADashboard : LiveTADashboard) },
             ],
           },
 
           {
-            element: <ProtectedRoute allowedRoles={[ROLES.HEAD_TA]} />,
-            children: [{ path: 'head-ta-dashboard/:courseId', element: page(HeadTADashboard) }],
+            element: <ProtectedRoute allowedRoles={TA_ROLES} />,
+            children: [{ path: 'head-ta-dashboard/:courseId', element: page(USE_MOCKS && demos ? demos.HeadTADashboard : LiveHeadTADashboard) }],
           },
         ],
       },

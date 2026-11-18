@@ -2,7 +2,7 @@ import concurrent.futures
 from unittest.mock import patch
 
 from django.db import IntegrityError, OperationalError, close_old_connections, connections
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 
 from accounts.models import User
 from assignments.models import TAAssignment
@@ -397,6 +397,7 @@ class AssignTAServiceTests(TestCase):
             )
 
 
+@skipUnlessDBFeature("has_select_for_update")
 class AssignTAServiceConcurrencyTests(TransactionTestCase):
     """
     تست‌های هم‌روندی (Race Condition).

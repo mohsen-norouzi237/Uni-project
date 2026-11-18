@@ -21,7 +21,6 @@ function App() {
   useEffect(() => {
     const handleSessionExpired = () => {
       logout();
-      queryClient.clear();
     };
     window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
     return () => window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);

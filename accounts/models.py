@@ -6,7 +6,7 @@ class User(AbstractUser):
     class Role(models.TextChoices):
         SUPER_ADMIN = "SUPER_ADMIN", "Super Admin"
         DEPT_ADMIN = "DEPT_ADMIN", "Department Admin"
-        ADMIN = "ADMIN", "Admin"  # Generic admin alias used by local test accounts / frontend roles.ts
+        ADMIN = "ADMIN", "Admin"
         PROFESSOR = "PROFESSOR", "Professor"
         HEAD_TA = "HEAD_TA", "Head TA"
         TA = "TA", "Teaching Assistant"

@@ -11,6 +11,11 @@ export interface AdminStats {
 
 /** dashboards/serializers.py::UserDashboardSerializer (GET /api/dashboards/me/) */
 export interface MyCourseRow {
+  id: number;
+  assignment_role: 'TA' | 'HEAD_TA';
+  professor_id: number;
+  course_id: number;
+  semester_id: number;
   course_name: string;
   course_code: string;
   /** get_role_display() of the assignment role, e.g. "Head TA". */
@@ -25,7 +30,23 @@ export interface MyCourseRow {
  * config/urls.py). The leading '/dashboards/' prefix is what the request
  * interceptor in api/client.ts uses to escape the default /api/v1 baseURL.
  */
+export interface ProfessorCourse {
+  id: number;
+  course_id: number;
+  course_code: string;
+  course_name: string;
+  semester_id: number;
+  semester_name: string;
+  group: string;
+  head_ta_name: string | null;
+}
+
 export const dashboardService = {
+  async professorCourses(userId: number): Promise<ProfessorCourse[]> {
+    const { data } = await apiClient.get<ProfessorCourse[]>(`/users/${userId}/schedule/`);
+    return data;
+  },
+
   async adminStats(semesterId?: number | string): Promise<AdminStats> {
     const { data } = await apiClient.get<AdminStats>('/dashboards/admin-stats/', {
       params: semesterId ? { semester_id: semesterId } : {},
@@ -35,7 +56,9 @@ export const dashboardService = {
 
   async myCourses(): Promise<MyCourseRow[]> {
     // The endpoint returns a bare array (no pagination envelope).
-    const { data } = await apiClient.get<MyCourseRow[]>('/dashboards/me/');
+    const { data } = await apiClient.get<MyCourseRow[]>('/dashboards/me/', {
+      params: { all_semesters: true },
+    });
     return data;
   },
 };
@@ -43,5 +66,6 @@ export const dashboardService = {
 export const dashboardKeys = {
   all: ['dashboard'] as const,
   adminStats: (semesterId?: number | string) => ['dashboard', 'admin-stats', semesterId ?? 'latest'] as const,
+  professorCourses: (userId: number) => ['dashboard', 'schedule', userId] as const,
   myCourses: () => ['dashboard', 'me'] as const,
 };

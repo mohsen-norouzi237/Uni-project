@@ -15,7 +15,10 @@
 const ACCESS_TOKEN_KEY = "tams_access_token";
 const REFRESH_TOKEN_KEY = "tams_refresh_token";
 
+let sessionVersion = 0;
+
 export const tokenStorage = {
+  getSessionVersion: () => sessionVersion,
   getAccessToken: () => sessionStorage.getItem(ACCESS_TOKEN_KEY),
   setAccessToken: (token: string) =>
     sessionStorage.setItem(ACCESS_TOKEN_KEY, token),
@@ -23,10 +26,12 @@ export const tokenStorage = {
   setRefreshToken: (token: string) =>
     sessionStorage.setItem(REFRESH_TOKEN_KEY, token),
   setTokens: (access: string, refresh: string) => {
+    sessionVersion += 1;
     sessionStorage.setItem(ACCESS_TOKEN_KEY, access);
     sessionStorage.setItem(REFRESH_TOKEN_KEY, refresh);
   },
   clearTokens: () => {
+    sessionVersion += 1;
     sessionStorage.removeItem(ACCESS_TOKEN_KEY);
     sessionStorage.removeItem(REFRESH_TOKEN_KEY);
   },

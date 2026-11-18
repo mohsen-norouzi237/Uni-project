@@ -1,5 +1,5 @@
-from django.core.cache import cache
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, Exists, OuterRef, Prefetch, Q, Value
+from django.db.models.functions import Concat, Trim
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import (
     OpenApiParameter,
@@ -10,12 +10,14 @@ from drf_spectacular.utils import (
 )
 from rest_framework import generics, serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from assignments.models import TAAssignment
 from assignments.serializers import ErrorResponseSerializer
-from core.permissions import IsDeptAdmin, IsHeadTA, IsManagement, IsProfessor
+from core.permissions import IsDeptAdmin, IsManagement
+from core.query_params import semester_query_id
 
 from .models import Course, CourseProfessorMapping
 from .serializers import (
@@ -69,35 +71,47 @@ class CourseViewSet(viewsets.ModelViewSet):
             return [IsDeptAdmin()]
 
         if self.action == "get_tas":
-            return [(IsManagement | IsProfessor | IsHeadTA)()]
+            return [IsAuthenticated()]
 
         return [IsAuthenticated()]
 
     def get_queryset(self):
-        queryset = Course.objects.all()
-        params = self.request.query_params
+        queryset = Course.objects.order_by("course_code")
+        if self.action not in {"list", "retrieve"}:
+            return queryset
 
-        semester_id = params.get("semester_id")
-        # The SPA sends the `all` sentinel for "no filter" — strip it, otherwise
-        # django-filter would try to match the literal string.
+        params = self.request.query_params
+        semester_id = semester_query_id(self.request)
         search = (params.get("search") or "").strip()
-        if search in {"", "all"}:
-            self.searching = False
-        else:
-            self.searching = True
+        if self.action == "list" and search:
             queryset = queryset.filter(
                 Q(course_code__icontains=search) | Q(course_name__icontains=search)
             )
 
-        mapping_qs = CourseProfessorMapping.objects.select_related("professor")
+        mapping_qs = CourseProfessorMapping.objects.select_related("professor").order_by(
+            "-semester__start_date", "group", "pk"
+        )
         ta_qs = TAAssignment.objects.all()
+        ta_filter = Q()
 
-        if semester_id:
+        if semester_id is not None:
             mapping_qs = mapping_qs.filter(semester_id=semester_id)
             ta_qs = ta_qs.filter(semester_id=semester_id)
             ta_filter = Q(ta_assignments__semester_id=semester_id)
-        else:
-            ta_filter = Q()
+            if self.action == "list":
+                queryset = queryset.filter(Exists(mapping_qs.filter(course_id=OuterRef("pk"))))
+
+        instructor = params.get("instructor")
+        if self.action == "list" and instructor:
+            mapping_qs = mapping_qs.annotate(
+                display_name=Trim(Concat(
+                    "professor__first_name", Value(" "), "professor__last_name"
+                ))
+            ).filter(
+                Q(display_name=instructor)
+                | Q(display_name="", professor__username=instructor)
+            )
+            queryset = queryset.filter(Exists(mapping_qs.filter(course_id=OuterRef("pk"))))
 
         prefetch_mappings = Prefetch(
             "professor_mappings",
@@ -118,43 +132,15 @@ class CourseViewSet(viewsets.ModelViewSet):
                 distinct=True,
             ),
         )
+        if self.action == "list":
+            staffing_status = params.get("status")
+            if staffing_status == "missing_head_ta":
+                queryset = queryset.filter(annotated_head_ta_count=0)
+            elif staffing_status == "missing_tas":
+                queryset = queryset.filter(annotated_head_ta_count__gt=0, annotated_ta_count__lt=2)
+            elif staffing_status == "fully_staffed":
+                queryset = queryset.filter(annotated_head_ta_count__gt=0, annotated_ta_count__gte=2)
         return queryset
-
-    def list(self, request, *args, **kwargs):
-        semester_id = request.query_params.get("semester_id", "all")
-        cache_key = f"courses_list_semester_{semester_id}"
-        cached_data = cache.get(cache_key)
-        if cached_data:
-            return Response(cached_data)
-        response = super().list(request, *args, **kwargs)
-        # Reduced TTL from 3600 to 300 seconds (5 mins) to prevent stale cache edge cases
-        cache.set(cache_key, response.data, timeout=300)
-        return response
-
-    def _invalidate_course_cache(self):
-        """پاک کردن الگوی کش لیست دروس هنگام هرگونه تغییر دیتایی"""
-        try:
-            if hasattr(cache, "delete_pattern"):
-                cache.delete_pattern("courses_list_semester_*")
-            else:
-                cache.clear()
-        except Exception:
-            pass
-
-    def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        self._invalidate_course_cache()
-        return response
-
-    def update(self, request, *args, **kwargs):
-        response = super().update(request, *args, **kwargs)
-        self._invalidate_course_cache()
-        return response
-
-    def destroy(self, request, *args, **kwargs):
-        response = super().destroy(request, *args, **kwargs)
-        self._invalidate_course_cache()
-        return response
 
     @extend_schema(
         summary="دریافت لیست اساتید برای فیلتر دایرکتوری دروس",
@@ -182,8 +168,8 @@ class CourseViewSet(viewsets.ModelViewSet):
         be missing entirely (404 in live mode).
         """
         mappings = CourseProfessorMapping.objects.select_related("professor")
-        semester_id = request.query_params.get("semester_id")
-        if semester_id and semester_id != "all":
+        semester_id = semester_query_id(request)
+        if semester_id is not None:
             mappings = mappings.filter(semester_id=semester_id)
 
         names = set()
@@ -211,6 +197,7 @@ class CourseViewSet(viewsets.ModelViewSet):
                     "course_id": serializers.IntegerField(),
                     "course_code": serializers.CharField(),
                     "head_ta": serializers.DictField(allow_null=True),
+                    "head_tas": serializers.ListField(child=serializers.DictField()),
                     "tas": serializers.ListField(child=serializers.DictField()),
                 },
             ),
@@ -222,13 +209,33 @@ class CourseViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"], url_path="tas")
     def get_tas(self, request, pk=None):
         course = self.get_object()
-        semester_id = request.query_params.get("semester_id")
+        semester_id = semester_query_id(request)
 
-        assignments = course.ta_assignments.select_related("user")
-        if semester_id:
+        assignments = course.ta_assignments.select_related("user").order_by("pk")
+        mappings = course.professor_mappings.all()
+        if semester_id is not None:
             assignments = assignments.filter(semester_id=semester_id)
+            mappings = mappings.filter(semester_id=semester_id)
 
-        head_ta_data = None
+        user = request.user
+        if user.role == "PROFESSOR":
+            mappings = mappings.filter(professor=user)
+            if not mappings.exists():
+                raise PermissionDenied()
+            assignments = assignments.filter(
+                professor=user, semester_id__in=mappings.values("semester_id")
+            )
+        elif user.role in {"HEAD_TA", "TA"}:
+            head_slots = assignments.filter(user=user, role=TAAssignment.Role.HEAD_TA)
+            if not head_slots.exists():
+                raise PermissionDenied()
+            assignments = assignments.filter(Exists(head_slots.filter(
+                semester_id=OuterRef("semester_id"), professor_id=OuterRef("professor_id")
+            )))
+        elif not IsManagement().has_permission(request, self):
+            raise PermissionDenied()
+
+        head_tas = []
         tas_data = []
 
         for assignment in assignments:
@@ -236,11 +243,18 @@ class CourseViewSet(viewsets.ModelViewSet):
             full_name = f"{user.first_name} {user.last_name}".strip()
             user_info = {
                 "id": user.id,
+                "assignment_id": assignment.pk,
+                "can_remove": (
+                    request.user.role not in {"TA", "HEAD_TA"}
+                    or assignment.role == TAAssignment.Role.TA
+                ),
                 "name": full_name or user.username,
                 "email": user.email,
+                "semester_id": assignment.semester_id,
+                "professor_id": assignment.professor_id,
             }
             if assignment.role == TAAssignment.Role.HEAD_TA:
-                head_ta_data = user_info
+                head_tas.append(user_info)
             else:
                 tas_data.append(user_info)
 
@@ -248,7 +262,8 @@ class CourseViewSet(viewsets.ModelViewSet):
             {
                 "course_id": course.id,
                 "course_code": course.course_code,
-                "head_ta": head_ta_data,
+                "head_ta": next(iter(head_tas), None),
+                "head_tas": head_tas,
                 "tas": tas_data,
             }
         )
@@ -272,15 +287,3 @@ class AssignProfessorView(generics.CreateAPIView):
     queryset = CourseProfessorMapping.objects.all()
     serializer_class = CourseProfessorMappingSerializer
     permission_classes = [IsDeptAdmin]
-
-    def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        # Invalidate course list cache upon assigning/changing professor to prevent stale cache read
-        try:
-            if hasattr(cache, "delete_pattern"):
-                cache.delete_pattern("courses_list_semester_*")
-            else:
-                cache.clear()
-        except Exception:
-            pass
-        return response

@@ -182,6 +182,22 @@ class TAAssignmentListSerializer(serializers.ModelSerializer):
         return obj.user.role.lower() if isinstance(obj.user.role, str) else obj.user.role
 
 
+def _scheduled_head_ta(obj) -> str | None:
+    heads = getattr(obj.course, "prefetched_ta_assignments", None)
+    if heads is None:
+        heads = obj.course.ta_assignments.filter(
+            semester_id=obj.semester_id,
+            professor_id=obj.professor_id,
+            role=TAAssignment.Role.HEAD_TA,
+        ).select_related("user")
+    for assignment in heads:
+        if (assignment.semester_id, assignment.professor_id) == (
+            obj.semester_id, obj.professor_id
+        ):
+            return assignment.user.get_full_name() or assignment.user.username
+    return None
+
+
 class UserScheduleSerializer(serializers.ModelSerializer):
     """سریالایزر دریافت برنامه اساینمنت‌های یک تی‌ای یا هد تی‌ای"""
 
@@ -206,26 +222,11 @@ class UserScheduleSerializer(serializers.ModelSerializer):
             "head_ta_name",
         ]
 
-    def get_professor_name(self, obj) -> str | None:
-        mappings = obj.course.professor_mappings.all()
-        if mappings and mappings[0].professor:
-            return (
-                f"{mappings[0].professor.first_name} {mappings[0].professor.last_name}".strip()
-                or mappings[0].professor.username
-            )
-        return None
+    def get_professor_name(self, obj) -> str:
+        return obj.professor.get_full_name() or obj.professor.username
 
     def get_head_ta_name(self, obj) -> str | None:
-        if hasattr(obj.course, "prefetched_ta_assignments"):
-            head_tas = [
-                ta
-                for ta in obj.course.prefetched_ta_assignments
-                if ta.role == TAAssignment.Role.HEAD_TA
-            ]
-            if head_tas:
-                user = head_tas[0].user
-                return f"{user.first_name} {user.last_name}".strip() or user.username
-        return None
+        return _scheduled_head_ta(obj)
 
 
 class ProfessorScheduleSerializer(serializers.ModelSerializer):
@@ -244,6 +245,7 @@ class ProfessorScheduleSerializer(serializers.ModelSerializer):
             "course_id",
             "course_code",
             "course_name",
+            "semester_id",
             "semester_name",
             "group",
             "role",
@@ -254,12 +256,7 @@ class ProfessorScheduleSerializer(serializers.ModelSerializer):
         return "PROFESSOR"
 
     def get_head_ta_name(self, obj) -> str | None:
-        if hasattr(obj.course, "prefetched_ta_assignments"):
-            head_tas = [ta for ta in obj.course.prefetched_ta_assignments if ta.role == "HEAD_TA"]
-            if head_tas:
-                user = head_tas[0].user
-                return f"{user.first_name} {user.last_name}".strip() or user.username
-        return None
+        return _scheduled_head_ta(obj)
 
 
 class ErrorResponseSerializer(serializers.Serializer):

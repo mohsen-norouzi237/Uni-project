@@ -14,9 +14,14 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 # base.py lives at config/settings/base.py -> root is 3 levels up.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+if os.environ.get("DJANGO_SETTINGS_MODULE") == "config.settings.dev":
+    load_dotenv(BASE_DIR / ".env.local")
 
 
 # Quick-start development settings - unsuitable for production
@@ -26,7 +31,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 # No hardcoded fallback: the committed dev key was itself a leak (anyone with
 # repo access could forge signed data / session cookies). If SECRET_KEY is
 # missing we fail aggressively at import time instead of silently booting with
-# a known key. Provide it via .env / environment / docker-compose env_file.
+# a known key. Set it in .env.local for native dev or in the runtime environment.
 SECRET_KEY = os.environ["SECRET_KEY"]  # raises KeyError if unset
 
 # SECURITY WARNING: don't run with debug turned on in production!
@@ -105,14 +110,11 @@ DATABASES = {
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL:
-    try:
-        import dj_database_url  # type: ignore[import-not-found]  # installed via requirements.txt
+    import dj_database_url
 
-        DATABASES["default"] = dj_database_url.parse(
-            DATABASE_URL, conn_max_age=600, ssl_require=False
-        )
-    except ImportError:
-        pass
+    DATABASES["default"] = dj_database_url.parse(
+        DATABASE_URL, conn_max_age=600, ssl_require=False
+    )
 
 
 # Password validation

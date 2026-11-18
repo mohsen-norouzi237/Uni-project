@@ -60,6 +60,7 @@ echo "Restoring '$BACKUP_FILE' into database '$POSTGRES_DB'..."
 docker compose exec -T "$DB_SERVICE" pg_restore \
     -U "$POSTGRES_USER" \
     -d "$POSTGRES_DB" \
+    --single-transaction \
     --clean \
     --if-exists \
     --no-owner \

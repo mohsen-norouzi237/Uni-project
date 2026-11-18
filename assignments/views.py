@@ -22,7 +22,8 @@ from core.exceptions import (
     InvalidAssignmentRoleError,
 )
 from core.pagination import StandardResultsSetPagination
-from core.permissions import IsHeadTA, IsManagement, IsProfessor
+from core.permissions import IsHeadTA, IsManagement, IsProfessor, IsTA
+from core.query_params import semester_query_id
 
 from .models import TAAssignment
 from .serializers import (
@@ -64,9 +65,9 @@ class AssignmentListView(generics.ListAPIView):
 
     #: Base manager query used when no filters are supplied, so the view
     #: behaves like a plain ListAPIView with sane ordering.
-    base_queryset = TAAssignment.objects.select_related("user", "course", "semester").order_by(
-        "-semester__start_date", "course__course_code", "role"
-    )
+    base_queryset = TAAssignment.objects.select_related(
+        "user", "course", "semester", "professor"
+    ).order_by("-semester__start_date", "course__course_code", "role", "pk")
 
     def filter_queryset(self, queryset):
         # Skip DRF's global DEFAULT_FILTER_BACKENDS (django-filter requires an
@@ -77,7 +78,7 @@ class AssignmentListView(generics.ListAPIView):
         queryset = self.base_queryset
 
         params = self.request.query_params
-        semester_id = params.get("semester_id")
+        semester_id = semester_query_id(self.request)
         if semester_id:
             queryset = queryset.filter(semester_id=semester_id)
 
@@ -196,7 +197,7 @@ class DeleteAssignmentView(generics.DestroyAPIView):
 
     queryset = TAAssignment.objects.all()
     serializer_class = TAAssignmentDetailSerializer
-    permission_classes = [IsManagement | IsProfessor | IsHeadTA]
+    permission_classes = [IsManagement | IsProfessor | IsTA]
 
     def get_object(self):
         try:

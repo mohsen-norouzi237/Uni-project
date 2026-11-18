@@ -44,6 +44,7 @@ export type AnyOption = typeof ANY;
 
 export interface CourseFilterState {
   search: string;
+  instructor: string;
   /** Narrowed: a typo like 'fully-staffed' is now a compile error. */
   status: StaffingStatus | AnyOption;
 }
@@ -53,10 +54,11 @@ export interface CourseFilterState {
  * Pagination is part of the query (and therefore part of the React Query key),
  * so the server owns paging and the UI never slices a page it already holds.
  */
-export type CourseQuery = CourseFilterState & PageQuery;
+export type CourseQuery = CourseFilterState & PageQuery & { semesterId?: number };
 
 export const DEFAULT_COURSE_FILTERS: CourseFilterState = {
   search: '',
+  instructor: ANY,
   status: ANY,
 };
 

@@ -38,7 +38,7 @@ export interface WorkloadFilterState {
   onlyOverloaded: boolean;
 }
 
-export type WorkloadQuery = WorkloadFilterState & PageQuery;
+export type WorkloadQuery = WorkloadFilterState & PageQuery & { semesterId?: number };
 
 export const DEFAULT_WORKLOAD_FILTERS: WorkloadFilterState = {
   search: '',

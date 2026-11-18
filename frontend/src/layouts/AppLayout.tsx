@@ -9,19 +9,16 @@ import Sidebar from '@/components/layout/Sidebar';
  * for content on phones.
  */
 const AppLayout = () => {
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [drawerLocation, setDrawerLocation] = useState<string | null>(null);
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
 
-  // Close the drawer whenever the route changes.
-  useEffect(() => {
-    setIsDrawerOpen(false);
-  }, [location.pathname]);
+  const isDrawerOpen = drawerLocation === location.key;
 
   useEffect(() => {
     if (!isDrawerOpen) return;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsDrawerOpen(false);
+      if (event.key === 'Escape') setDrawerLocation(null);
     };
     document.addEventListener('keydown', handleEscape);
     // Move focus into the drawer so keyboard users are not left behind it.
@@ -42,7 +39,7 @@ const AppLayout = () => {
           <div
             className="absolute inset-0 bg-black/50"
             aria-hidden="true"
-            onClick={() => setIsDrawerOpen(false)}
+            onClick={() => setDrawerLocation(null)}
           />
           {/* The drawer is modal: it is announced as a dialog and takes focus,
               matching the Escape handler above. Previously it had the Escape
@@ -55,7 +52,7 @@ const AppLayout = () => {
             tabIndex={-1}
             className="absolute inset-y-0 right-0 animate-slide-in-top shadow-xl"
           >
-            <Sidebar onNavigate={() => setIsDrawerOpen(false)} />
+            <Sidebar onNavigate={() => setDrawerLocation(null)} />
           </div>
         </div>
       )}
@@ -66,7 +63,7 @@ const AppLayout = () => {
           <span className="text-base font-bold text-slate-900">TAMS</span>
           <button
             type="button"
-            onClick={() => setIsDrawerOpen((open) => !open)}
+            onClick={() => setDrawerLocation(isDrawerOpen ? null : location.key)}
             aria-label={isDrawerOpen ? 'بستن منو' : 'باز کردن منو'}
             aria-expanded={isDrawerOpen}
             className="rounded-lg border border-slate-200 p-2 text-slate-700 hover:bg-slate-50"

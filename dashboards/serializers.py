@@ -19,7 +19,7 @@ class WorkloadStatus(models.TextChoices):
 class WorkloadSerializer(serializers.Serializer):
     # Field names mirror the frontend contract (frontend/src/types/workload.ts):
     #   id / name / assignedCourses / semesterLimit are camelCased client-side.
-    id = serializers.IntegerField(source="user_id")
+    id = serializers.IntegerField()
     name = serializers.CharField()
     role = serializers.CharField()
     assigned_courses = serializers.ListField(child=serializers.CharField())
@@ -29,7 +29,28 @@ class WorkloadSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=WorkloadStatus.choices)
 
 
+class WorkloadDistributionSerializer(serializers.Serializer):
+    zero = serializers.IntegerField()
+    one = serializers.IntegerField()
+    two = serializers.IntegerField()
+    three_or_more = serializers.IntegerField()
+    total = serializers.IntegerField()
+
+
+class WorkloadPageSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = WorkloadSerializer(many=True)
+    distribution = WorkloadDistributionSerializer(required=False)
+
+
 class UserDashboardSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    assignment_role = serializers.CharField()
+    course_id = serializers.IntegerField()
+    professor_id = serializers.IntegerField()
+    semester_id = serializers.IntegerField()
     course_name = serializers.CharField()
     course_code = serializers.CharField()
     role = serializers.CharField()

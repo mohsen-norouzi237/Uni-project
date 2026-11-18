@@ -8,7 +8,7 @@ import { dashboardKeys, dashboardService, type MyCourseRow } from '@/services/da
 
 /**
  * Wired to GET /api/dashboards/me/ (dashboards/views.py::UserDashboardAPIView).
- * The endpoint returns the current user's assignments for the latest semester;
+ * The page requests the current user's assignments across their semesters.
  * `role` is get_role_display() output ("Head TA" / "Teaching Assistant").
  */
 export default function MyTACourses() {
@@ -19,18 +19,16 @@ export default function MyTACourses() {
         queryFn: () => dashboardService.myCourses(),
     });
 
-    // The /me/ payload has no per-row id; index-based navigation uses the
-    // course_code as a stable key for the dashboards' :courseId param.
     const handleNavigate = (course: MyCourseRow) => {
-        if (course.role.startsWith('Head')) {
-            navigate(`/head-ta-dashboard/${encodeURIComponent(course.course_code)}`);
+        if (course.assignment_role === 'HEAD_TA') {
+            navigate(`/head-ta-dashboard/${course.id}`);
         } else {
-            navigate(`/ta-dashboard/${encodeURIComponent(course.course_code)}`);
+            navigate(`/ta-dashboard/${course.id}`);
         }
     };
 
     const columns: Column<MyCourseRow>[] = [
-        { header: 'کد درس', accessor: (item) => <code className="text-sm bg-gray-100 px-2 py-1 rounded">{item.course_code}</code>, sortable: true },
+        { header: 'کد درس', accessor: (item) => <code className="text-sm bg-gray-100 px-2 py-1 rounded">{item.course_code}</code>, sortable: true, sortKey: 'course_code' },
         { header: 'نام درس', accessor: 'course_name', sortable: true },
         { header: 'استاد', accessor: (item) => item.professor_name || '—' },
         { header: 'سرتیم', accessor: (item) => item.head_ta_name || '—' },
@@ -38,8 +36,8 @@ export default function MyTACourses() {
         {
             header: 'نقش شما',
             accessor: (item) => (
-                <Badge variant={item.role.startsWith('Head') ? 'info' : 'default'}>
-                    {item.role.startsWith('Head') ? 'سرتیم (Head TA)' : 'دستیار (TA)'}
+                <Badge variant={item.assignment_role === 'HEAD_TA' ? 'info' : 'default'}>
+                    {item.assignment_role === 'HEAD_TA' ? 'سرتیم (Head TA)' : 'دستیار (TA)'}
                 </Badge>
             ),
         },

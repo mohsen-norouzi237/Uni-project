@@ -1,21 +1,11 @@
 import { create } from 'zustand';
 import type { LoginCredentials, LoginResponse, User } from '@/types/auth';
 import apiClient, { toApiError } from '@/api/client';
+import { queryClient } from '@/app/queryClient';
 import { tokenStorage } from '@/utils/token';
 import { ALL_ROLES, ROLES, type UserRole } from '@/constants/roles';
 
-/**
- * Mock mode is opt-in through the environment, never through a magic token
- * value. Set `VITE_USE_MOCKS=false` (or remove it) and the store talks to the
- * real Django endpoints with no code change.
- */
-const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
-
-/**
- * Role groups are NOT redeclared here. `@/constants/roles` is the single
- * source of truth shared with Sidebar.tsx and router.tsx; only the mock-role
- * validator below needs the flat list, and it derives it from ALL_ROLES.
- */
+import { USE_MOCKS } from '@/services/http';
 
 /**
  * The mock role is switchable through `VITE_MOCK_ROLE`, so every guarded route
@@ -67,10 +57,12 @@ export const useAuthStore = create<AuthState>((set) => ({
     error: null,
 
     login: async (credentials) => {
+        const initialSession = tokenStorage.getSessionVersion();
         set({ error: null });
 
         if (USE_MOCKS) {
             await new Promise((resolve) => setTimeout(resolve, 400));
+            if (initialSession !== tokenStorage.getSessionVersion()) return;
             if (credentials.username !== 'admin' || credentials.password !== '123456') {
                 const message = 'نام کاربری یا رمز عبور اشتباه است.';
                 set({ error: message });
@@ -81,15 +73,20 @@ export const useAuthStore = create<AuthState>((set) => ({
             return;
         }
 
+        let session = initialSession;
         try {
             const { data } = await apiClient.post<LoginResponse>(LOGIN_ENDPOINT, credentials);
+            if (session !== tokenStorage.getSessionVersion()) return;
             tokenStorage.setTokens(data.access, data.refresh);
+            session = tokenStorage.getSessionVersion();
 
             // SimpleJWT's default token endpoint returns tokens only, so the
             // profile is fetched separately when it is not embedded.
             const user = data.user ?? (await apiClient.get<User>(ME_ENDPOINT)).data;
+            if (session !== tokenStorage.getSessionVersion()) return;
             set({ user, isAuthenticated: true, isLoading: false, error: null });
         } catch (error) {
+            if (session !== tokenStorage.getSessionVersion()) throw error;
             const apiError = toApiError(error, 'ورود ناموفق بود.');
             tokenStorage.clearTokens();
             set({ user: null, isAuthenticated: false, isLoading: false, error: apiError.message });
@@ -105,6 +102,7 @@ export const useAuthStore = create<AuthState>((set) => ({
             void apiClient.post(LOGOUT_ENDPOINT, { refresh: refreshToken }).catch(() => undefined);
         }
         tokenStorage.clearTokens();
+        queryClient.clear();
         set({ user: null, isAuthenticated: false, isLoading: false, error: null });
     },
 
@@ -120,11 +118,14 @@ export const useAuthStore = create<AuthState>((set) => ({
             return;
         }
 
+        const session = tokenStorage.getSessionVersion();
         set({ isLoading: true });
         try {
             const { data } = await apiClient.get<User>(ME_ENDPOINT);
+            if (session !== tokenStorage.getSessionVersion()) return;
             set({ user: data, isAuthenticated: true, isLoading: false, error: null });
         } catch {
+            if (session !== tokenStorage.getSessionVersion()) return;
             tokenStorage.clearTokens();
             set({ user: null, isAuthenticated: false, isLoading: false });
         }

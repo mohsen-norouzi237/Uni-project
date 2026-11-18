@@ -1,5 +1,4 @@
 import axios, {
-    AxiosError,
     AxiosHeaders,
     type InternalAxiosRequestConfig,
 } from 'axios';
@@ -12,7 +11,7 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 const REFRESH_PATH = '/auth/refresh/';
 
 /** Requests we retry after a refresh are tagged so they can never loop. */
-type RetriableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean };
+type RetriableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean; _session?: number; _access?: string };
 
 export const apiClient = axios.create({
     baseURL: BASE_URL,
@@ -45,29 +44,14 @@ const refreshClient = axios.create({
     timeout: 15_000,
 });
 
-// --- Refresh queue -----------------------------------------------------------
+let pendingRefresh: { session: number; promise: Promise<void> } | undefined;
 
-type QueueEntry = {
-    resolve: (token: string) => void;
-    reject: (error: unknown) => void;
-};
-
-let isRefreshing = false;
-let failedQueue: QueueEntry[] = [];
-
-const flushQueue = (error: unknown, token: string | null) => {
-    const queue = failedQueue;
-    failedQueue = [];
-    for (const entry of queue) {
-        if (token) entry.resolve(token);
-        else entry.reject(error);
-    }
-};
-
-const enqueue = () =>
-    new Promise<string>((resolve, reject) => {
-        failedQueue.push({ resolve, reject });
-    });
+async function refreshSession(session: number, refresh: string) {
+    const { data } = await refreshClient.post<TokenRefreshResponse>(REFRESH_PATH, { refresh });
+    if (session !== tokenStorage.getSessionVersion()) return;
+    tokenStorage.setAccessToken(data.access);
+    if (data.refresh) tokenStorage.setRefreshToken(data.refresh);
+}
 
 // --- Session expiry ----------------------------------------------------------
 
@@ -102,75 +86,61 @@ const setAuthHeader = (config: InternalAxiosRequestConfig, token: string) => {
 
 // --- Interceptors ------------------------------------------------------------
 
-apiClient.interceptors.request.use((config) => {
+const AUTH_PATHS = new Set(['/auth/login/', '/auth/logout/', REFRESH_PATH]);
+
+apiClient.interceptors.request.use((config: RetriableRequestConfig) => {
+    if (AUTH_PATHS.has(config.url ?? '')) return config;
+    const session = tokenStorage.getSessionVersion();
+    if (config._session !== undefined && config._session !== session) {
+        throw new axios.CanceledError('Session changed');
+    }
+    config._session = session;
     const token = tokenStorage.getAccessToken();
-    if (token) setAuthHeader(config, token);
+    if (token) {
+        config._access = token;
+        setAuthHeader(config, token);
+    }
     return config;
 });
 
 apiClient.interceptors.response.use(
     (response) => response,
     async (error: unknown) => {
-        if (!axios.isAxiosError(error)) return Promise.reject(error);
+        if (!axios.isAxiosError(error) || error.response?.status !== 401) throw error;
 
-        const axiosError = error as AxiosError;
-        const originalRequest = axiosError.config as RetriableRequestConfig | undefined;
-
-        const isUnauthorized = axiosError.response?.status === 401;
-
-        // Not a recoverable 401 -> surface it to the caller.
-        if (!isUnauthorized || !originalRequest || originalRequest._retry) {
-            if (isUnauthorized && originalRequest?._retry) notifySessionExpired();
-            return Promise.reject(axiosError);
-        }
-
-        // The refresh endpoint itself returned 401 -> the session is gone.
-        if (originalRequest.url?.includes(REFRESH_PATH)) {
+        const request = error.config as RetriableRequestConfig | undefined;
+        const session = tokenStorage.getSessionVersion();
+        if (!request || request._session !== session) throw error;
+        if (request._retry) {
             notifySessionExpired();
-            return Promise.reject(axiosError);
+            throw error;
         }
 
-        // Mark BEFORE any retry path (queued or not) so a request can be
-        // replayed at most once. This is what prevents the refresh loop.
-        originalRequest._retry = true;
+        const refresh = tokenStorage.getRefreshToken();
+        if (!refresh) {
+            notifySessionExpired();
+            throw error;
+        }
 
-        // A refresh is already in flight: wait for it instead of starting another.
-        if (isRefreshing) {
+        request._retry = true;
+        if (request._access === tokenStorage.getAccessToken()) {
+            if (pendingRefresh?.session !== session) {
+                const promise = refreshSession(session, refresh).finally(() => {
+                    if (pendingRefresh?.session === session) pendingRefresh = undefined;
+                });
+                pendingRefresh = { session, promise };
+            }
+
             try {
-                const token = await enqueue();
-                setAuthHeader(originalRequest, token);
-                return await apiClient(originalRequest);
-            } catch (queueError) {
-                return Promise.reject(queueError);
+                await pendingRefresh.promise;
+            } catch (refreshError) {
+                if (session === tokenStorage.getSessionVersion()) notifySessionExpired();
+                throw refreshError;
             }
         }
 
-        const refreshToken = tokenStorage.getRefreshToken();
-        if (!refreshToken) {
-            notifySessionExpired();
-            return Promise.reject(axiosError);
-        }
-
-        isRefreshing = true;
-        try {
-            const { data } = await refreshClient.post<TokenRefreshResponse>(REFRESH_PATH, {
-                refresh: refreshToken,
-            });
-
-            tokenStorage.setAccessToken(data.access);
-            // SimpleJWT with ROTATE_REFRESH_TOKENS=True also returns a new refresh token.
-            if (data.refresh) tokenStorage.setRefreshToken(data.refresh);
-
-            flushQueue(null, data.access);
-            setAuthHeader(originalRequest, data.access);
-            return await apiClient(originalRequest);
-        } catch (refreshError) {
-            flushQueue(refreshError, null);
-            notifySessionExpired();
-            return Promise.reject(refreshError);
-        } finally {
-            isRefreshing = false;
-        }
+        // The retry goes through the request interceptor and uses the latest access token.
+        return apiClient(request);
     },
 );
 
@@ -185,13 +155,13 @@ export const toApiError = (error: unknown, fallbackMessage = 'خطای غیرم�
     if (axios.isAxiosError(error)) {
         const status = error.response?.status ?? 0;
         const data = error.response?.data as
-            | { detail?: string; message?: string; [key: string]: unknown }
+            | { detail?: string; message?: string; error?: string; [key: string]: unknown }
             | undefined;
 
         const fieldErrors: Record<string, string[]> = {};
         if (data && typeof data === 'object') {
             for (const [key, value] of Object.entries(data)) {
-                if (key === 'detail' || key === 'message') continue;
+                if (key === 'detail' || key === 'message' || key === 'error') continue;
                 if (Array.isArray(value) && value.every((v) => typeof v === 'string')) {
                     fieldErrors[key] = value;
                 }
@@ -200,7 +170,7 @@ export const toApiError = (error: unknown, fallbackMessage = 'خطای غیرم�
 
         const result: ApiError = {
             status,
-            message: data?.detail ?? data?.message ?? error.message ?? fallbackMessage,
+            message: data?.error ?? data?.detail ?? data?.message ?? fallbackMessage,
         };
         if (Object.keys(fieldErrors).length > 0) result.fieldErrors = fieldErrors;
         return result;

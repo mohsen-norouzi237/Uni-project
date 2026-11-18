@@ -88,6 +88,11 @@ const mockTasks: Task[] = [
 ];
 
 export default function CourseTAsPage() {
+    const { courseId } = useParams();
+    return <MockCourseTAsPage key={courseId} />;
+}
+
+function MockCourseTAsPage() {
     // The route is /courses/:courseId -> read the path param, not the query string.
     const { courseId } = useParams<{ courseId: string }>();
     const activeCourseId = Number(courseId);
@@ -98,8 +103,8 @@ export default function CourseTAsPage() {
     const courseInfo =
         MOCK_COURSES.find((c) => c.id === activeCourseId) ?? {
             id: activeCourseId,
-            code: `#${courseId ?? ''}`,
-            title: 'درس نامشخص',
+            course_code: `#${courseId ?? ''}`,
+            course_name: 'درس نامشخص',
         };
 
     const [loading, setLoading] = useState<boolean>(true);
@@ -151,7 +156,6 @@ export default function CourseTAsPage() {
     useEffect(() => {
         if (!Number.isFinite(activeCourseId)) return;
 
-        setLoading(true);
         const timer = setTimeout(() => {
             setMembers(mockMembers.filter((member) => member.courseId === activeCourseId));
             setLoading(false);
@@ -253,8 +257,8 @@ export default function CourseTAsPage() {
         {
             header: 'نقش',
             accessor: (item) => {
-                let badgeStyle = 'bg-slate-100 text-slate-700';
-                let roleTitle = 'دستیار آموزشی';
+                let badgeStyle: string;
+                let roleTitle: string;
 
                 if (item.role === 'Instructor') {
                     badgeStyle = 'bg-purple-100 text-purple-800 font-semibold border border-purple-200';
@@ -331,7 +335,7 @@ export default function CourseTAsPage() {
             <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
                 <div>
                     <h1 className="text-2xl font-bold mb-1 text-slate-900">
-                        مدیریت دستیاران درس {courseInfo.title} ({courseInfo.code})
+                        مدیریت دستیاران درس {courseInfo.course_name} ({courseInfo.course_code})
                     </h1>
                     <p className="text-slate-500 text-sm">
                         مشاهده استاد، Head TA و لیست دستیاران آموزشی به همراه مدیریت تسک‌های اختصاص‌یافته.

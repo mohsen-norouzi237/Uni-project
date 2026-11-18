@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
-import DataTable from '../components/DataTable';
-import type { Column } from '../components/DataTable';
-import Badge from '../components/Badge';
-import DataTableSkeleton from '../components/DataTableSkeleton';
-import Modal from '../components/Modal';
-import Alert from '../components/Alert';
+import DataTable from '@/components/DataTable';
+import type { Column } from '@/components/DataTable';
+import Badge from '@/components/Badge';
+import DataTableSkeleton from '@/components/DataTableSkeleton';
+import Modal from '@/components/Modal';
+import Alert from '@/components/Alert';
 
 interface Professor {
   id: number;
@@ -27,7 +27,8 @@ export default function UiKitPreviewPage() {
   };
 
   useEffect(() => {
-    handleReload();
+    const timer = setTimeout(() => setLoading(false), 2000);
+    return () => clearTimeout(timer);
   }, []);
 
   const sampleData: Professor[] = [

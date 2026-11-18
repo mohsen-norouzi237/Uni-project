@@ -1,21 +1,44 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { EmptyState } from '@/components/EmptyState';
 import { ErrorState } from '@/components/ErrorState';
 import DataTableSkeleton from '@/components/DataTableSkeleton';
 import Pagination from '@/components/Pagination';
+import LoadingState from '@/components/LoadingState';
+import PageContainer from '@/components/PageContainer';
+import { USE_MOCKS } from '@/services/http';
+import { currentSemester, semesterKeys, semesterService } from '@/services/semesters.service';
 import CapacityBar from '@/components/CapacityBar';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { usePagination } from '@/hooks/usePagination';
 import { workloadKeys, workloadService } from '@/services/workload.service';
-import { MOCK_DEPARTMENTS } from '@/mocks/courses.mock';
-import { ANY } from '@/types/course';
 import type { WorkloadFilterState } from '@/types/workload';
 import { DEFAULT_WORKLOAD_FILTERS } from '@/types/workload';
 
 const ITEMS_PER_PAGE = 10;
 
 export const WorkloadMonitoringPage = () => {
+  const [params] = useSearchParams();
+  const terms = useQuery({ queryKey: semesterKeys.lists(), queryFn: semesterService.list, enabled: !USE_MOCKS });
+  if (!USE_MOCKS && terms.isPending) return <LoadingState />;
+  const id = Number(params.get('semester_id'));
+  const rows = terms.data ?? [];
+  if (terms.isError) {
+    return <ErrorState message="دریافت نیم‌سال‌ها ناموفق بود." onRetry={() => void terms.refetch()} />;
+  }
+  if (!USE_MOCKS && !rows.length) {
+    return (
+      <PageContainer title="پایش حجم کاری دستیاران">
+        <EmptyState title="هنوز نیم‌سالی ثبت نشده است" description="پس از ثبت نیم‌سال، آمار ظرفیت دستیاران اینجا نمایش داده می‌شود." />
+      </PageContainer>
+    );
+  }
+  const semester = rows.find((row) => row.id === id) ?? currentSemester(rows) ?? rows[0];
+  return <WorkloadMonitoring key={semester?.id} semesterId={semester?.id} semesterName={semester?.name} />;
+};
+
+function WorkloadMonitoring({ semesterId, semesterName }: { semesterId?: number; semesterName?: string }) {
   const [filters, setFilters] = useState<WorkloadFilterState>(DEFAULT_WORKLOAD_FILTERS);
   const { page, resetPage, bind } = usePagination(ITEMS_PER_PAGE);
 
@@ -25,7 +48,7 @@ export const WorkloadMonitoringPage = () => {
   };
 
   const debouncedSearch = useDebouncedValue(filters.search, 300);
-  const query = { ...filters, search: debouncedSearch, page, pageSize: ITEMS_PER_PAGE };
+  const query = { ...filters, search: debouncedSearch, semesterId, page, pageSize: ITEMS_PER_PAGE };
 
   const { data, isPending, isError, isFetching, refetch } = useQuery({
     queryKey: workloadKeys.list(query),
@@ -33,32 +56,21 @@ export const WorkloadMonitoringPage = () => {
     placeholderData: keepPreviousData,
   });
 
-  const { data: summary = [] } = useQuery({
-    queryKey: workloadKeys.summary(),
-    queryFn: () => workloadService.summary(),
+  const { data: summary, isPending: summaryPending, isError: summaryError, refetch: refetchSummary } = useQuery({
+    queryKey: workloadKeys.summary(semesterId),
+    queryFn: () => workloadService.summary(semesterId),
   });
 
   const users = data?.results ?? [];
   const pagination = bind(data);
 
-  const distribution = useMemo(() => {
-    const counts = { one: 0, two: 0, threeOrMore: 0 };
-    summary.forEach((user) => {
-      const length = user.assignedCourses.length;
-      if (length === 1) counts.one += 1;
-      else if (length === 2) counts.two += 1;
-      else if (length >= 3) counts.threeOrMore += 1;
-    });
-    return counts;
-  }, [summary]);
-
-  // Guarded denominator: an empty summary must not produce NaN bar heights.
-  const total = Math.max(summary.length, 1);
+  const total = Math.max(summary?.total ?? 0, 1);
 
   const bars = [
-    { label: '۱ درس', value: distribution.one, color: 'bg-brand-700' },
-    { label: '۲ درس', value: distribution.two, color: 'bg-brand-700' },
-    { label: '۳ درس (تکمیل ظرفیت)', value: distribution.threeOrMore, color: 'bg-brand-500' },
+    { label: 'بدون درس', value: summary?.zero ?? 0, color: 'bg-slate-400' },
+    { label: '۱ درس', value: summary?.one ?? 0, color: 'bg-brand-700' },
+    { label: '۲ درس', value: summary?.two ?? 0, color: 'bg-brand-700' },
+    { label: '۳ درس یا بیشتر', value: summary?.three_or_more ?? 0, color: 'bg-brand-500' },
   ];
 
   return (
@@ -66,31 +78,37 @@ export const WorkloadMonitoringPage = () => {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">پایش حجم کاری دستیاران</h1>
         <p className="mt-1 text-sm text-slate-500">
-          بررسی ظرفیت تخصیص دستیاران آموزشی و وضعیت تکمیل سقف مجاز ترم
+          بررسی ظرفیت تخصیص دستیاران آموزشی {semesterName && `در نیم‌سال ${semesterName}`}
         </p>
       </div>
 
+      {summaryPending ? (
+        <p role="status">در حال دریافت توزیع حجم کاری…</p>
+      ) : summaryError ? (
+        <ErrorState message="خطا در دریافت توزیع حجم کاری" onRetry={() => void refetchSummary()} />
+      ) : (
       <div className="space-y-4 rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold text-slate-800">توزیع حجم کاری دستیاران</h2>
           <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-500">
-            کل دستیاران پایش‌شده: {summary.length} نفر
+            کل دستیاران پایش‌شده: {summary?.total ?? 0} نفر
           </span>
         </div>
 
-        <div className="grid h-40 grid-cols-3 items-end gap-4 border-b border-slate-100 pb-2 pt-4">
+        <div className="grid h-40 grid-cols-4 items-end gap-4 border-b border-slate-100 pb-2 pt-4">
           {bars.map((bar) => (
             <div key={bar.label} className="flex h-full flex-col items-center justify-end gap-2">
               <span className="text-sm font-bold text-slate-700">{bar.value} نفر</span>
               <div
                 className={`w-full max-w-[80px] rounded-t-xl ${bar.color} transition-all`}
-                style={{ height: `${Math.max((bar.value / total) * 100, 15)}%` }}
+                style={{ height: `${(bar.value / total) * 100}%` }}
               />
               <span className="text-center text-sm font-medium text-slate-500">{bar.label}</span>
             </div>
           ))}
         </div>
       </div>
+      )}
 
       <div className="space-y-4">
         <div className="flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
@@ -112,24 +130,6 @@ export const WorkloadMonitoringPage = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <div>
-              <label htmlFor="workload-department" className="sr-only">
-                گرایش
-              </label>
-              <select
-                id="workload-department"
-                value={filters.department}
-                onChange={(event) => setFilter('department', event.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-              >
-                <option value={ANY}>همه گرایش‌ها</option>
-                {MOCK_DEPARTMENTS.map((department) => (
-                  <option key={department} value={department}>
-                    {department}
-                  </option>
-                ))}
-              </select>
-            </div>
 
             <div>
               <label htmlFor="workload-search" className="sr-only">
@@ -148,7 +148,7 @@ export const WorkloadMonitoringPage = () => {
         </div>
 
         {isPending ? (
-          <DataTableSkeleton rows={ITEMS_PER_PAGE} columns={5} />
+          <DataTableSkeleton rows={ITEMS_PER_PAGE} columns={4} />
         ) : isError ? (
           <ErrorState message="خطا در دریافت اطلاعات حجم کاری" onRetry={() => void refetch()} />
         ) : users.length === 0 ? (
@@ -168,7 +168,6 @@ export const WorkloadMonitoringPage = () => {
                 <thead>
                   <tr className="border-b border-slate-100 bg-slate-50 text-sm font-semibold text-slate-500">
                     <th scope="col" className="p-4">نام دستیار</th>
-                    <th scope="col" className="p-4">گروه</th>
                     <th scope="col" className="p-4">دروس تخصیص‌یافته</th>
                     <th scope="col" className="p-4 text-center">سقف مجاز</th>
                     <th scope="col" className="p-4 text-center">وضعیت بار کاری</th>
@@ -178,10 +177,9 @@ export const WorkloadMonitoringPage = () => {
                   {users.map((user) => (
                     <tr key={user.id} className="transition-colors hover:bg-slate-50/50">
                       <td className="p-4 font-semibold text-slate-900">{user.name}</td>
-                      <td className="p-4 text-slate-600">{user.department}</td>
                       <td className="p-4">
                         <div className="flex flex-wrap gap-1.5">
-                          {user.assignedCourses.map((code) => (
+                          {[...new Set(user.assignedCourses)].map((code) => (
                             <span
                               key={code}
                               dir="ltr"
@@ -225,6 +223,6 @@ export const WorkloadMonitoringPage = () => {
       </div>
     </div>
   );
-};
+}
 
 export default WorkloadMonitoringPage;

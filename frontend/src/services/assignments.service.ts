@@ -16,7 +16,8 @@ export interface AssignmentRow {
   course_name: string;
   semester: number;
   semester_name: string;
-  group: string;
+  professor: number;
+  professor_name: string;
   /** Raw choice value: 'TA' | 'HEAD_TA'. */
   role: 'TA' | 'HEAD_TA';
 }

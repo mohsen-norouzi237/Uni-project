@@ -55,10 +55,19 @@ const toParams = (query: WorkloadQuery): Record<string, string | number | boolea
     page: query.page,
     page_size: query.pageSize,
   };
+  if (query.semesterId !== undefined) params.semester_id = query.semesterId;
   if (query.search.trim() !== '') params['search'] = query.search.trim();
   if (query.onlyOverloaded) params['overloaded'] = true;
   return params;
 };
+
+export interface WorkloadDistribution {
+  zero: number;
+  one: number;
+  two: number;
+  three_or_more: number;
+  total: number;
+}
 
 export const workloadService = {
   /** Returns ONE page of TAs; `count` is the full filtered total. */
@@ -74,23 +83,24 @@ export const workloadService = {
     return { ...data, results: data.results.map(toWorkloadUser) };
   },
 
-  /**
-   * Unfiltered dataset, used for the distribution chart.
-   *
-   * There is no `/summary/` endpoint on the backend (it was a phantom call
-   * that 404ed in live mode), so this requests the largest legal page from
-   * the same paginated workload endpoint.
-   */
-  async summary(): Promise<WorkloadUser[]> {
+  async summary(semesterId?: number): Promise<WorkloadDistribution> {
     if (USE_MOCKS) {
       await delay(200);
-      return MOCK_WORKLOAD_DATA;
+      const result = { zero: 0, one: 0, two: 0, three_or_more: 0, total: MOCK_WORKLOAD_DATA.length };
+      for (const user of MOCK_WORKLOAD_DATA) {
+        const count = user.assignedCourses.length;
+        if (count === 0) result.zero += 1;
+        else if (count === 1) result.one += 1;
+        else if (count === 2) result.two += 1;
+        else result.three_or_more += 1;
+      }
+      return result;
     }
 
-    const { data } = await apiClient.get<Paginated<WorkloadRow>>(BASE_PATH, {
-      params: { page: 1, page_size: 100 },
+    const { data } = await apiClient.get<{ distribution: WorkloadDistribution }>(BASE_PATH, {
+      params: { page_size: 1, include_distribution: 1, semester_id: semesterId },
     });
-    return data.results.map(toWorkloadUser);
+    return data.distribution;
   },
 };
 
@@ -98,5 +108,5 @@ export const workloadKeys = {
   all: ['workload'] as const,
   lists: () => ['workload', 'list'] as const,
   list: (query: WorkloadQuery) => ['workload', 'list', query] as const,
-  summary: () => ['workload', 'summary'] as const,
+  summary: (semesterId?: number) => ['workload', 'summary', semesterId] as const,
 };
